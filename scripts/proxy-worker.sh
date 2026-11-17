@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs on the head node inside the container for SERVING_MODE=disaggregated.
-# Forwards the OpenAI endpoints through the official vLLM Mooncake disaggregation
-# proxy so that prefill and decode instances cooperate per request.
+# Forwards the OpenAI endpoints through vLLM's Mooncake disaggregation proxy
+# (scripts/pd-proxy.py) so that prefill and decode instances cooperate per request.
 set -euo pipefail
 
 : "${SCENARIO_ENV:?SCENARIO_ENV must be the generated scenario.env}"
@@ -16,7 +16,7 @@ source "${SCENARIO_ENV}"
 : "${PREFILL_BOOTSTRAP_PORT:?PREFILL_BOOTSTRAP_PORT is required}"
 : "${PROXY_PORT:?PROXY_PORT is required}"
 
-exec python3 /opt/vllm-proxy/mooncake_connector_proxy.py \
+exec python3 "${ROOT:?ROOT is required}/scripts/pd-proxy.py" \
   --prefill "http://${HEAD_IP}:${PREFILL_API_PORT}" "${PREFILL_BOOTSTRAP_PORT}" \
   --decode "http://${HEAD_IP}:${DECODE_API_PORT}" \
   --host 0.0.0.0 --port "${PROXY_PORT}" \
