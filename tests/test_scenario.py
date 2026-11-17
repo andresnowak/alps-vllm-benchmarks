@@ -255,11 +255,13 @@ class ScenarioAllocationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires exactly 8 nodes"):
             select_nodes(resolved, 12)
         prefill_server = resolved["deployments"]["prefill"]["server"]
-        self.assertNotIn("moe-backend", prefill_server)
+        # DeepEP HT and LL need DeepGEMM experts on CUDA.
+        self.assertEqual(prefill_server["moe-backend"], "deep_gemm")
         self.assertNotIn("gpu-memory-utilization", prefill_server)
         decode_server = resolved["deployments"]["decode"]["server"]
         self.assertEqual(decode_server["max-num-batched-tokens"], 1024)
         self.assertEqual(decode_server["gpu-memory-utilization"], 0.9)
+        self.assertEqual(decode_server["moe-backend"], "deep_gemm")
 
     def test_platform_constraint_is_checked_before_submission(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not support platform rocm"):

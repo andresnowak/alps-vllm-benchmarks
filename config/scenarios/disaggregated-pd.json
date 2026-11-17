@@ -7,7 +7,8 @@
   },
   "features": {
     "external_kv_transfer": true,
-    "disaggregated_prefill_decode": "mooncake"
+    "disaggregated_prefill_decode": "mooncake",
+    "moe_backend": "deep_gemm"
   },
   "environment": {
     "FI_PROVIDER": "cxi",
@@ -28,7 +29,8 @@
         "kv-transfer-config": {
           "kv_connector": "MooncakeConnector",
           "kv_role": "kv_producer"
-        }
+        },
+        "moe-backend": "deep_gemm"
       }
     },
     "decode": {
@@ -42,7 +44,8 @@
         "kv-transfer-config": {
           "kv_connector": "MooncakeConnector",
           "kv_role": "kv_consumer"
-        }
+        },
+        "moe-backend": "deep_gemm"
       }
     },
     "proxy": {

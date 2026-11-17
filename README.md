@@ -95,7 +95,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | Scenario | Change | Constraints or notes |
 |---|---|---|
 | `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off |
-| `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA GPU memory 0.90; decode-oriented 1024-token scheduler cap |
+| `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA pins `deep_gemm`, GPU memory 0.90; decode-oriented 1024-token scheduler cap |
 | `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; CUDA pins `deep_gemm`, while ROCm retains its platform backend selection |
 | `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable with baseline or low-latency all-to-all |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
@@ -106,7 +106,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `prefix-caching` | Local GPU prefix cache | No external KV connector |
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
 | `async-scheduling` | Async scheduling | Overlaps CPU scheduling and accelerator execution |
-| `disaggregated-pd` | Mooncake prefill/decode split | Four prefill plus four decode nodes; CUDA only; not composable |
+| `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; not composable |
 | `production` | External production vLLM parity | Exactly four CUDA nodes, TP=4/DCP=4, 1M context, FP8 KV cache, 32 sequences, 4096-token scheduler cap, and one MTP token |
 | `million-context` | Experimental vLLM 0.30 capacity reproducer | Exactly four CUDA nodes, TP=4, FP8 KV cache, native CPU KV offload; currently fails startup without DCP |
 
@@ -119,8 +119,9 @@ The resolver rejects the incompatibilities it explicitly encodes; ordered overla
 normal last-component-wins deep-merge semantics. On ROCm, `uccl-ll` uses 0.70 GPU memory
 utilization and eager execution. On CUDA, `uccl-ht` pins DeepGEMM because automatic selection
 chose FlashInfer CUTLASS and stalled distributed engine initialization; the working path used
-DeepGEMM with `DeepEPHTPrepareAndFinalize`. ROCm retains its platform-native MoE selection. Use
-`moe-deep-gemm` or `uccl-ll+moe-deep-gemm` to pin DeepGEMM in other CUDA runs.
+DeepGEMM with `DeepEPHTPrepareAndFinalize`. DeepEP HT and LL both need DeepGEMM on CUDA, so
+`uccl-ht`, `uccl-ll`, and both `disaggregated-pd` roles pin it. ROCm retains its platform-native
+MoE selection. Use `moe-deep-gemm` to pin DeepGEMM in other CUDA runs.
 
 `uccl-ll` retains `max-num-batched-tokens=1024`. Job 5037516 tested 2048 with CUDA GPU
 memory utilization 0.90 and still exhausted GPU memory during startup. DeepEP sizes its

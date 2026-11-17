@@ -20,6 +20,14 @@
         "gpu-memory-utilization": 0.7,
         "enforce-eager": true
       }
+    },
+    "cuda": {
+      "server": {
+        "moe-backend": "deep_gemm"
+      },
+      "features": {
+        "moe_backend": "deep_gemm"
+      }
     }
   },
   "features": {
