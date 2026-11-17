@@ -1,0 +1,14 @@
+{
+  "id": "baseline-tp4-pp4",
+  "description": "The baseline as one TP4 x PP4 instance over four nodes: each node is one pipeline stage, and expert parallelism (EP4) stays inside the node.",
+  "constraints": {
+    "exact_nodes": 4
+  },
+  "topology": {
+    "tensor_parallel_size": 4,
+    "pipeline_parallel_size": 4
+  },
+  "features": {
+    "pipeline_parallel": 4
+  }
+}

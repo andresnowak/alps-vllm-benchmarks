@@ -221,7 +221,6 @@ def validate_server(resolved: dict[str, Any], environment: dict[str, str]) -> No
             )
 
 
-# Build the complete vLLM configuration executed by every role-local node.
 # First node address of every role. Disaggregated roles take consecutive slices of the
 # allocation in the launcher's order, prefill first, and coordinate from their own first node.
 def role_head_ips(
@@ -237,6 +236,51 @@ def role_head_ips(
     return {"prefill": node_ips[0], "decode": node_ips[prefill_nodes]}
 
 
+# vLLM configs for one pipeline-parallel instance that spans the whole allocation: each node
+# hosts consecutive ranks (TP innermost, so one stage per node when TP = GPUs per node), and the
+# nodes join through vLLM's multi-node mp backend, with every node but the first headless.
+def pipeline_instance_configs(
+    server: dict[str, Any],
+    *,
+    nodes: int,
+    gpus_per_node: int,
+    tp_size: int,
+    pp_size: int,
+    head_ip: str,
+    api_port: int,
+    master_port: int,
+) -> dict[int, dict[str, Any]]:
+    instance_gpus = tp_size * pp_size
+    if instance_gpus % gpus_per_node or instance_gpus // gpus_per_node != nodes:
+        raise ValueError(
+            f"TP={tp_size} x PP={pp_size} needs exactly {instance_gpus / gpus_per_node:g} nodes "
+            f"of {gpus_per_node} GPUs, allocation has {nodes}"
+        )
+    common = deep_merge(
+        server,
+        {
+            "tensor-parallel-size": tp_size,
+            "pipeline-parallel-size": pp_size,
+            "distributed-executor-backend": "mp",
+            "nnodes": nodes,
+            "master-addr": head_ip,
+            "master-port": master_port,
+        },
+    )
+    configs = {}
+    for node_rank in range(nodes):
+        config = deepcopy(common)
+        config["node-rank"] = node_rank
+        if node_rank == 0:
+            config["host"] = "0.0.0.0"
+            config["port"] = api_port
+        else:
+            config["headless"] = True
+        configs[node_rank] = config
+    return configs
+
+
+# Build the complete vLLM configuration executed by every role-local node.
 def build_vllm_instance_configs(
     resolved: dict[str, Any],
     *,
@@ -254,6 +298,22 @@ def build_vllm_instance_configs(
         )
     dp_local = gpus_per_node // tp_size
     mode = resolved.get("mode", "single")
+    pp_size = int(resolved["topology"].get("pipeline_parallel_size", 1))
+    if pp_size > 1:
+        if mode != "single":
+            raise ValueError("pipeline parallelism is supported only in single serving mode")
+        return {
+            "single": pipeline_instance_configs(
+                resolved["server"],
+                nodes=nodes,
+                gpus_per_node=gpus_per_node,
+                tp_size=tp_size,
+                pp_size=pp_size,
+                head_ip=head_ip,
+                api_port=api_port,
+                master_port=dp_rpc_port,
+            )
+        }
     if mode == "single":
         roles = {
             "single": {
@@ -338,8 +398,11 @@ def materialize_scenario(
         raise ValueError(
             f"gpus_per_node={gpus_per_node} is not divisible by tensor_parallel_size={tp_size}"
         )
-    topology["data_parallel_size_local"] = gpus_per_node // tp_size
-    topology["data_parallel_size"] = selected_nodes * topology["data_parallel_size_local"]
+    pp_size = int(topology.get("pipeline_parallel_size", 1))
+    # A pipeline-parallel instance spans nodes, so it has no node-local data parallelism.
+    topology["data_parallel_size_local"] = gpus_per_node // tp_size if pp_size == 1 else 0
+    topology["data_parallel_size"] = selected_nodes * gpus_per_node // (tp_size * pp_size)
+    # vLLM's expert-parallel group spans TP x DP within one pipeline stage.
     topology["expert_parallel_size"] = topology["data_parallel_size"] * tp_size
 
     server = resolved["server"]
@@ -376,7 +439,9 @@ def materialize_scenario(
             config_path = output_dir / f"vllm-{role}-node{node_rank}.yaml"
             write_yaml(config_path, config)
             identity_config = deepcopy(config)
-            identity_config["data-parallel-address"] = "<runtime-address>"
+            for address in ("data-parallel-address", "master-addr"):
+                if address in identity_config:
+                    identity_config[address] = "<runtime-address>"
             config_records[role][str(node_rank)] = {
                 "path": config_path.name,
                 "sha256": file_sha256(config_path),
@@ -416,6 +481,7 @@ def materialize_scenario(
         "API_PORT": str(api_port),
         "DP_RPC_PORT": str(dp_rpc_port),
         "TP_SIZE": str(tp_size),
+        "PP_SIZE": str(pp_size),
         "ALL2ALL": backend,
         "MAX_MODEL_LEN": str(server["max-model-len"]),
         "MAX_NUM_SEQS": str(server["max-num-seqs"]),

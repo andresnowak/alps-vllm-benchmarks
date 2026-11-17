@@ -37,21 +37,23 @@ TP_SIZE="${TP_SIZE:-2}"
 # One Slurm task runs per serving node. Prefill and decode share one srun step whose task ranks
 # are global, so the launcher passes each role's first rank as ROLE_TASK_OFFSET.
 NODE_RANK=$(( ${SLURM_PROCID:?SLURM_PROCID is required} - ${ROLE_TASK_OFFSET:-0} ))
-DP_LOCAL=$((GPUS_PER_NODE / TP_SIZE))
+# Instances span TP x PP GPUs; a pipeline-parallel instance spans several nodes.
+PP_SIZE="${PP_SIZE:-1}"
+DP_LOCAL=$((GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
 
 role="${DEPLOYMENT_ROLE:-single}"
 if [[ "${SERVING_MODE}" == "single" ]]; then
   [[ "${role}" == "single" ]] || { echo "SERVING_MODE=single but DEPLOYMENT_ROLE=${role}" >&2; exit 2; }
-  DP_TOTAL=$((SLURM_JOB_NUM_NODES * DP_LOCAL))
+  DP_TOTAL=$((SLURM_JOB_NUM_NODES * GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
 else
   if [[ "${role}" != "prefill" && "${role}" != "decode" ]]; then
     echo "SERVING_MODE=disaggregated requires DEPLOYMENT_ROLE=prefill|decode, got '${role}'" >&2
     exit 2
   fi
   if [[ "${role}" == "prefill" ]]; then
-    DP_TOTAL=$((PREFILL_NODES * DP_LOCAL))
+    DP_TOTAL=$((PREFILL_NODES * GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
   else
-    DP_TOTAL=$((DECODE_NODES * DP_LOCAL))
+    DP_TOTAL=$((DECODE_NODES * GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
   fi
 fi
 CONFIG="${SCENARIO_VLLM_CONFIG_DIR}/vllm-${role}-node${NODE_RANK}.yaml"
@@ -72,9 +74,9 @@ if [[ "${JIT_CACHE_MODE:-readwrite}" == "readwrite" ]]; then
   echo "[node ${NODE_RANK}] JIT cache agent started for role=${role} (pid $!)"
 fi
 
-printf '[node %s] host=%s platform=%s role=%s scenario=%s TP=%s DP=%s local-DP=%s EP=%s\n' \
+printf '[node %s] host=%s platform=%s role=%s scenario=%s TP=%s PP=%s DP=%s local-DP=%s EP=%s\n' \
   "${NODE_RANK}" "$(hostname)" "${PLATFORM:-unknown}" "${role}" "${SCENARIO_ID:-unknown}" \
-  "${TP_SIZE}" "${DP_TOTAL}" "${DP_LOCAL}" "$((DP_TOTAL * TP_SIZE))"
+  "${TP_SIZE}" "${PP_SIZE}" "${DP_TOTAL}" "${DP_LOCAL}" "$((DP_TOTAL * TP_SIZE))"
 CONFIG_ARGS=(--config "${CONFIG}")
 python -c 'import torch, vllm; print(f"torch={torch.__version__} cuda={torch.version.cuda} hip={torch.version.hip} vllm={vllm.__version__}")'
 SERVER_COMMAND=(vllm serve "${CONFIG_ARGS[@]}")

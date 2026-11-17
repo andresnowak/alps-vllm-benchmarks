@@ -587,7 +587,8 @@ def main() -> int:
     nodes = int(os.getenv("SLURM_JOB_NUM_NODES", "1"))
     gpus_per_node = int(os.getenv("GPUS_PER_NODE", "4"))
     tp_size = int(scenario["topology"]["tensor_parallel_size"])
-    dp_size = nodes * gpus_per_node // tp_size
+    pp_size = int(scenario["topology"].get("pipeline_parallel_size", 1))
+    dp_size = nodes * gpus_per_node // (tp_size * pp_size)
     topology = {
         "nodes": nodes,
         "node_list": list(filter(None, os.getenv("SLURM_NODELIST_EXPANDED", "").split(","))),
@@ -598,6 +599,9 @@ def main() -> int:
         "rank_distribution": "block:cyclic",
         "cpu_bind": "none",
     }
+    # Only pipeline-parallel runs record PP, so earlier experiment identities stay unchanged.
+    if pp_size > 1:
+        topology["pipeline_parallel_size"] = pp_size
     repository = repository_identity(ROOT)
     model = model_identity(Path(args.model), os.getenv("MODEL_REPO", "zai-org/GLM-5.3"))
     runtime_records, server_commands = load_runtime_records(logdir)
@@ -658,7 +662,8 @@ def main() -> int:
     experiment_fingerprint = canonical_sha256(experiment_identity)
     spec = slug(
         f"glm53-{args.platform}-{nodes}n-{gpus_per_node}g-tp{tp_size}-"
-        f"dp{dp_size}-ep{dp_size * tp_size}-{scenario_id}"
+        + (f"pp{pp_size}-" if pp_size > 1 else "")
+        + f"dp{dp_size}-ep{dp_size * tp_size}-{scenario_id}"
     )
     publishable = bool(
         repository["clean"]
