@@ -259,7 +259,7 @@ class ScenarioAllocationTests(unittest.TestCase):
         self.assertEqual(prefill_server["moe-backend"], "deep_gemm")
         self.assertNotIn("gpu-memory-utilization", prefill_server)
         decode_server = resolved["deployments"]["decode"]["server"]
-        self.assertEqual(decode_server["max-num-batched-tokens"], 1024)
+        self.assertEqual(decode_server["max-num-batched-tokens"], 256)
         self.assertEqual(decode_server["gpu-memory-utilization"], 0.9)
         self.assertEqual(decode_server["moe-backend"], "deep_gemm")
 
