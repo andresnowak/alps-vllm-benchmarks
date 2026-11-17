@@ -124,6 +124,17 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
     return points
 
 
+# KV cache capacity of every engine, from the vLLM start-up lines of each node's server log.
+def kv_cache_tokens(logdir: Path) -> dict[str, dict[str, int]]:
+    pattern = re.compile(r"\(EngineCore_DP(\d+) [^)]*\).*GPU KV cache size: ([\d,]+) tokens")
+    capacity: dict[str, dict[str, int]] = {}
+    for log in sorted(logdir.glob("serve-*-node*.log")):
+        role = log.name.removeprefix("serve-").rsplit("-node", 1)[0]
+        for match in pattern.finditer(log.read_text(errors="replace")):
+            capacity.setdefault(role, {})[match[1]] = int(match[2].replace(",", ""))
+    return capacity
+
+
 # Replace the statistical measurement volume with the point's explicit warmup volume.
 def make_warmup_point(point: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -286,9 +297,9 @@ def build_benchmark_command(
         "0",
         "--disable-tqdm",
         "--percentile-metrics",
-        "ttft,tpot",
+        "ttft,tpot,itl,e2el",
         "--metric-percentiles",
-        "99",
+        "50,90,95,99",
         "--save-result",
         "--result-dir",
         str(result_file.parent),
@@ -693,6 +704,7 @@ def main() -> int:
             "batch_script": batch_script_identity,
         },
         "topology": topology,
+        "kv_cache_tokens": kv_cache_tokens(logdir),
         "runtime": runtime_records,
         "server_commands": server_commands,
         "reproduction": reproduction,
