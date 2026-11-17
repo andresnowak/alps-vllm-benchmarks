@@ -621,9 +621,6 @@ def publish_bundles(staging: Path, expected: int) -> dict[str, Any]:
     identity_key = compatibility_keys.pop()
     identity = bundles[0][0]["compatibility"]
     job_ids = {metadata.get("job_id") for metadata, _ in bundles}
-    base_generations = {
-        metadata.get("base_generation") for metadata, _ in bundles
-    }
     namespace = namespace_path(identity_key, platform_name=identity["platform"])
     lock_seconds = float(os.getenv("JIT_CACHE_LOCK_SECONDS", "300"))
 
@@ -634,9 +631,7 @@ def publish_bundles(staging: Path, expected: int) -> dict[str, Any]:
         accepted_by_archive: list[tuple[Path, set[str]]] = []
         conflicts: list[str] = []
         node_divergences: list[str] = []
-        # Nodes in one job may compile different valid files. Keep the first
-        # version instead of treating this as a concurrent-job conflict.
-        coalesce_node_divergences = len(job_ids) == 1 and base_generations == {current}
+        published_files = dict(merged_files)
         contributors: list[dict[str, Any]] = []
         for metadata, archive in bundles:
             base_generation = metadata.get("base_generation")
@@ -645,9 +640,15 @@ def publish_bundles(staging: Path, expected: int) -> dict[str, Any]:
                 base_files, merged_files, metadata["files"]
             )
             accepted_by_archive.append((archive, set(accepted)))
-            (node_divergences if coalesce_node_divergences else conflicts).extend(
-                bundle_conflicts
-            )
+            # Nodes in one job may compile the same file with different bytes. When the version
+            # already merged came from an earlier node of this job, keep it. When it is still the
+            # published version, another job changed the file since this job hydrated: conflict.
+            for path in bundle_conflicts:
+                from_this_job = merged_files.get(path) != published_files.get(path)
+                if len(job_ids) == 1 and from_this_job:
+                    node_divergences.append(path)
+                else:
+                    conflicts.append(path)
             contributors.append(
                 {
                     "job_id": metadata.get("job_id"),
