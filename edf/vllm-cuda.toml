@@ -6,6 +6,8 @@ image = "${IMAGE_REF}"
 mounts = [
   "${PWD}:${PWD}",
   "${MODEL_SOURCE}:${MODEL_CONTAINER}:ro",
+  # Ritom scratch: the logs, models, and caches of a checkout may link here.
+  "/ritom/scratch/cscs/${USER}:/ritom/scratch/cscs/${USER}",
 ]
 
 workdir = "${PWD}"
