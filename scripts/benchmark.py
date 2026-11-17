@@ -330,11 +330,22 @@ def load_benchmark_result(
             f"{point['name']}: vLLM result is missing integer total_input_tokens"
         )
     expected_input_tokens = effective_input_len * completed
-    if total_input_tokens != expected_input_tokens:
+    # Tokenizers are not symmetric: decoding token IDs to text and encoding that text again can
+    # merge or split neighbouring tokens. vLLM's random dataset builds prompts that way, so a
+    # long prompt can come out one token longer or shorter. Allow up to one token per request;
+    # a wrong chat template or truncated prompts differ by far more. The observed total is kept
+    # in the run record next to the expected per-request length.
+    drift = total_input_tokens - expected_input_tokens
+    if abs(drift) > completed:
         raise RuntimeError(
             f"{point['name']}: post-template input length mismatch: "
             f"observed={total_input_tokens}, expected={expected_input_tokens} "
             f"({effective_input_len} per request)"
+        )
+    if drift:
+        log_status(
+            f"{point['name']}: input tokens differ by {drift:+d} over {completed} requests "
+            f"(observed={total_input_tokens}, expected={expected_input_tokens})"
         )
     return result, total_input_tokens
 
