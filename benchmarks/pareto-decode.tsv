@@ -1,0 +1,9 @@
+name	scenario	input_len	output_len	prompts	warmup_prompts	concurrency
+decode-c1	decode	1024	512	128	16	1
+decode-c4	decode	1024	512	128	16	4
+decode-c8	decode	1024	512	128	16	8
+decode-c16	decode	1024	512	128	32	16
+decode-c32	decode	1024	512	128	64	32
+decode-c64	decode	1024	512	128	128	64
+decode-c128	decode	1024	512	256	256	128
+decode-c256	decode	1024	512	512	512	256
