@@ -28,7 +28,10 @@
         "all2all-backend": "deepep_high_throughput",
         "kv-transfer-config": {
           "kv_connector": "MooncakeConnector",
-          "kv_role": "kv_producer"
+          "kv_role": "kv_producer",
+          "kv_connector_extra_config": {
+            "mooncake_protocol": "cxi"
+          }
         },
         "moe-backend": "deep_gemm"
       }
@@ -43,7 +46,10 @@
         "max-num-batched-tokens": 1024,
         "kv-transfer-config": {
           "kv_connector": "MooncakeConnector",
-          "kv_role": "kv_consumer"
+          "kv_role": "kv_consumer",
+          "kv_connector_extra_config": {
+            "mooncake_protocol": "cxi"
+          }
         },
         "moe-backend": "deep_gemm"
       }
