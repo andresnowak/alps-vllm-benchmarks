@@ -150,6 +150,12 @@ HEAD_NODE="${NODES[0]}"
 HEAD_IP="$(getent hosts "${HEAD_NODE}" | awk 'NR == 1 {print $1}')"
 status "materializing scenario=${SCENARIO} platform=${PLATFORM}"
 HEAD_IP="${HEAD_IP:-${HEAD_NODE}}"
+# Addresses of all nodes in launch order; disaggregated roles coordinate from their own first node.
+NODE_IPS=()
+for node in "${NODES[@]}"; do
+  node_ip="$(getent hosts "${node}" | awk 'NR == 1 {print $1}')"
+  NODE_IPS+=("${node_ip:-${node}}")
+done
 
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 API_PORT="${API_PORT:-8000}"
@@ -163,6 +169,7 @@ DP_RPC_PORT="${DP_RPC_PORT:-13345}"
   --model "${MODEL}" \
   --load-format "${LOAD_FORMAT}" \
   --head-ip "${HEAD_IP}" \
+  --node-ips "$(IFS=,; echo "${NODE_IPS[*]}")" \
   --api-port "${API_PORT}" \
   --dp-rpc-port "${DP_RPC_PORT}" \
   --output-dir "${SCENARIO_DIR}"
@@ -292,8 +299,8 @@ wait_for_health() {
 }
 
 if [[ "${SERVING_MODE}" == "disaggregated" ]]; then
-  wait_for_health "http://${HEAD_IP}:${PREFILL_API_PORT}" "prefill instance" || exit 1
-  wait_for_health "http://${HEAD_IP}:${DECODE_API_PORT}" "decode instance" || exit 1
+  wait_for_health "http://${PREFILL_HEAD_IP}:${PREFILL_API_PORT}" "prefill instance" || exit 1
+  wait_for_health "http://${DECODE_HEAD_IP}:${DECODE_API_PORT}" "decode instance" || exit 1
   wait_for_health "${BASE_URL}" "proxy" || exit 1
 else
   wait_for_health "${BASE_URL}" "server" || exit 1

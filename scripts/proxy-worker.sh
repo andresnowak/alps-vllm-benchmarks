@@ -16,8 +16,9 @@ source "${SCENARIO_ENV}"
 : "${PREFILL_BOOTSTRAP_PORT:?PREFILL_BOOTSTRAP_PORT is required}"
 : "${PROXY_PORT:?PROXY_PORT is required}"
 
+# Each role's API server runs on that role's first node.
 exec python3 "${ROOT:?ROOT is required}/scripts/pd-proxy.py" \
-  --prefill "http://${HEAD_IP}:${PREFILL_API_PORT}" "${PREFILL_BOOTSTRAP_PORT}" \
-  --decode "http://${HEAD_IP}:${DECODE_API_PORT}" \
+  --prefill "http://${PREFILL_HEAD_IP:?}:${PREFILL_API_PORT}" "${PREFILL_BOOTSTRAP_PORT}" \
+  --decode "http://${DECODE_HEAD_IP:?}:${DECODE_API_PORT}" \
   --host 0.0.0.0 --port "${PROXY_PORT}" \
   2>&1 | tee "${LOGDIR}/proxy.log"

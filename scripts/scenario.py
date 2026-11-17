@@ -222,6 +222,21 @@ def validate_server(resolved: dict[str, Any], environment: dict[str, str]) -> No
 
 
 # Build the complete vLLM configuration executed by every role-local node.
+# First node address of every role. Disaggregated roles take consecutive slices of the
+# allocation in the launcher's order, prefill first, and coordinate from their own first node.
+def role_head_ips(
+    resolved: dict[str, Any], head_ip: str, node_ips: list[str] | None
+) -> dict[str, str]:
+    if resolved.get("mode", "single") != "disaggregated":
+        return {"single": head_ip}
+    if not node_ips:
+        return {"prefill": head_ip, "decode": head_ip}
+    prefill_nodes = int(resolved["deployments"]["prefill"]["nodes"])
+    if len(node_ips) <= prefill_nodes:
+        raise ValueError("--node-ips must list every allocated node, prefill nodes first")
+    return {"prefill": node_ips[0], "decode": node_ips[prefill_nodes]}
+
+
 def build_vllm_instance_configs(
     resolved: dict[str, Any],
     *,
@@ -230,6 +245,7 @@ def build_vllm_instance_configs(
     head_ip: str,
     api_port: int,
     dp_rpc_port: int,
+    node_ips: list[str] | None = None,
 ) -> dict[str, dict[int, dict[str, Any]]]:
     tp_size = int(resolved["topology"]["tensor_parallel_size"])
     if gpus_per_node % tp_size:
@@ -262,6 +278,7 @@ def build_vllm_instance_configs(
             for role in ("prefill", "decode")
         }
 
+    heads = role_head_ips(resolved, head_ip, node_ips)
     configs: dict[str, dict[int, dict[str, Any]]] = {}
     for role, deployment in roles.items():
         role_nodes = int(deployment["nodes"])
@@ -272,7 +289,7 @@ def build_vllm_instance_configs(
                 "tensor-parallel-size": tp_size,
                 "data-parallel-size": dp_total,
                 "data-parallel-size-local": dp_local,
-                "data-parallel-address": head_ip,
+                "data-parallel-address": heads[role],
                 "data-parallel-rpc-port": int(deployment["rpc_port"]),
             },
         )
@@ -302,6 +319,7 @@ def materialize_scenario(
     api_port: int,
     dp_rpc_port: int,
     output_dir: Path,
+    node_ips: list[str] | None = None,
 ) -> Path:
     resolved = deepcopy(resolved)
     selected_nodes = select_nodes(resolved, nodes)
@@ -349,6 +367,7 @@ def materialize_scenario(
         head_ip=head_ip,
         api_port=api_port,
         dp_rpc_port=dp_rpc_port,
+        node_ips=node_ips,
     )
     config_records: dict[str, dict[str, dict[str, Any]]] = {}
     for role, node_configs in instance_configs.items():
@@ -408,8 +427,11 @@ def materialize_scenario(
     }
     if mode == "disaggregated":
         deployments = resolved["deployments"]
+        heads = role_head_ips(resolved, head_ip, node_ips)
         exports.update(
             {
+                "PREFILL_HEAD_IP": heads["prefill"],
+                "DECODE_HEAD_IP": heads["decode"],
                 "PREFILL_NODES": str(deployments["prefill"]["nodes"]),
                 "DECODE_NODES": str(deployments["decode"]["nodes"]),
                 "PREFILL_API_PORT": str(deployments["prefill"]["api_port"]),
@@ -440,6 +462,7 @@ def resolve(args: argparse.Namespace) -> None:
         api_port=args.api_port,
         dp_rpc_port=args.dp_rpc_port,
         output_dir=args.output_dir,
+        node_ips=[ip for ip in args.node_ips.split(",") if ip] or None,
     )
     print(resolved_path)
 
@@ -454,6 +477,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--load-format", required=True)
     parser.add_argument("--head-ip", required=True)
+    parser.add_argument(
+        "--node-ips",
+        default="",
+        help="comma-separated addresses of all allocated nodes, in launcher order",
+    )
     parser.add_argument("--api-port", type=int, default=8000)
     parser.add_argument("--dp-rpc-port", type=int, default=13345)
     parser.add_argument("--output-dir", required=True, type=Path)
