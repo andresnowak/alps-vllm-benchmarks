@@ -222,29 +222,38 @@ fi
 
 SERVE_PIDS=()
 
-# Launch one serving role across its assigned nodes.
-run_workers() {
-  # role node-list; single mode passes the full allocation (no --nodelist), because
-  # allocated node IDs are not contiguous and must never be turned into an A-B range.
-  local role="$1" node_list="$2"
-  local -a nodelist_args=()
-  if [[ -n "${node_list}" ]]; then
-    nodelist_args=(--nodelist="${node_list}")
-  fi
+# Launch the serving tasks, one per node.
+if [[ "${SERVING_MODE}" == "single" ]]; then
   srun --overlap \
     "${WORKER_ARGS[@]}" \
-    "${nodelist_args[@]}" \
-    -u /usr/bin/env DEPLOYMENT_ROLE="${role}" /bin/bash "${ROOT}/scripts/serve-worker.sh" &
+    -u /usr/bin/env DEPLOYMENT_ROLE=single /bin/bash "${ROOT}/scripts/serve-worker.sh" &
   SERVE_PIDS+=("$!")
-  status "serving role launched; role=${role} nodes=${node_list:-all} step_pid=$!"
-}
-
-if [[ "${SERVING_MODE}" == "single" ]]; then
-  run_workers single ""
+  status "serving launched; role=single nodes=all step_pid=$!"
 else
+  # Prefill and decode run in one srun step, so they share the step's Slingshot VNI and their
+  # CXI KV transfers reach each other. Separate steps get separate VNIs (VNI_NOT_FOUND), this
+  # system offers no job VNI (job_vni=none), and heterogeneous steps (srun A : B) crash srun
+  # together with --environment. --multi-prog gives the first PREFILL_NODES tasks the prefill
+  # role and the rest decode; with one task per node, task i runs on the i-th allocated node,
+  # the order the scenario used for each role's coordinator address. Task ranks are global, so
+  # ROLE_TASK_OFFSET turns them into role-local node ranks.
   PREFILL_COUNT="${PREFILL_NODES:?}"
-  run_workers prefill "$(IFS=,; echo "${NODES[*]:0:${PREFILL_COUNT}}")"
-  run_workers decode "$(IFS=,; echo "${NODES[*]:${PREFILL_COUNT}}")"
+  TOTAL_COUNT=$((PREFILL_COUNT + ${DECODE_NODES:?}))
+  (( TOTAL_COUNT == ${#NODES[@]} )) || {
+    echo "PD roles need ${TOTAL_COUNT} nodes, allocation has ${#NODES[@]}" >&2
+    exit 2
+  }
+  ROLES_CONF="${SCENARIO_DIR}/srun-roles.conf"
+  WORKER="/bin/bash ${ROOT}/scripts/serve-worker.sh"
+  printf '%s\n' \
+    "0-$((PREFILL_COUNT - 1)) /usr/bin/env DEPLOYMENT_ROLE=prefill ROLE_TASK_OFFSET=0 ${WORKER}" \
+    "${PREFILL_COUNT}-$((TOTAL_COUNT - 1)) /usr/bin/env DEPLOYMENT_ROLE=decode ROLE_TASK_OFFSET=${PREFILL_COUNT} ${WORKER}" \
+    > "${ROLES_CONF}"
+  srun --overlap "${WORKER_ARGS[@]}" \
+    --nodes="${TOTAL_COUNT}" --ntasks="${TOTAL_COUNT}" --ntasks-per-node=1 \
+    -u --multi-prog "${ROLES_CONF}" &
+  SERVE_PIDS+=("$!")
+  status "serving launched; prefill=${NODES[*]:0:${PREFILL_COUNT}} decode=${NODES[*]:${PREFILL_COUNT}} step_pid=$!"
 fi
 
 (( ${#SERVE_PIDS[@]} > 0 )) || { echo "no serving steps were launched" >&2; exit 2; }

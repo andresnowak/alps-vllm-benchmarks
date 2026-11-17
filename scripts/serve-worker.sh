@@ -34,9 +34,9 @@ TP_SIZE="${TP_SIZE:-2}"
   exit 2
 }
 
-# One Slurm task runs per serving node. PROCID is step-local, so disaggregated
-# prefill and decode steps each get contiguous data-parallel ranks from zero.
-NODE_RANK="${SLURM_PROCID:?SLURM_PROCID is required}"
+# One Slurm task runs per serving node. Prefill and decode share one srun step whose task ranks
+# are global, so the launcher passes each role's first rank as ROLE_TASK_OFFSET.
+NODE_RANK=$(( ${SLURM_PROCID:?SLURM_PROCID is required} - ${ROLE_TASK_OFFSET:-0} ))
 DP_LOCAL=$((GPUS_PER_NODE / TP_SIZE))
 
 role="${DEPLOYMENT_ROLE:-single}"
