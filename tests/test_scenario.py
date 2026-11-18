@@ -325,6 +325,35 @@ class VllmInstanceConfigTests(unittest.TestCase):
             "kv_consumer",
         )
 
+    def test_decode_replicas_span_nodes_with_pipeline_parallelism(self) -> None:
+        resolved = resolve_scenario("disaggregated-pd-decode-tp4-pp2", "cuda")
+        configs = build_vllm_instance_configs(
+            resolved,
+            nodes=8,
+            gpus_per_node=4,
+            head_ip="10.0.0.1",
+            api_port=8000,
+            dp_rpc_port=13345,
+            node_ips=[f"10.0.0.{i}" for i in range(1, 9)],
+        )
+
+        # TP4 x PP2 x DP2 on 4 decode nodes: each replica spans two nodes in one mp world.
+        for node_rank, config in configs["decode"].items():
+            self.assertEqual(config["tensor-parallel-size"], 4)
+            self.assertEqual(config["pipeline-parallel-size"], 2)
+            self.assertEqual(config["data-parallel-size"], 2)
+            self.assertEqual(config["data-parallel-size-local"], 1)
+            self.assertEqual(config["nnodes"], 4)
+            self.assertEqual(config["node-rank"], node_rank)
+            self.assertEqual(config["master-addr"], "10.0.0.5")
+            self.assertEqual(config["master-port"], 13346 + 1000)
+            self.assertNotIn("data-parallel-start-rank", config)
+            self.assertEqual(config.get("headless", False), node_rank != 0)
+        self.assertEqual(configs["decode"][0]["port"], 8200)
+        # Prefill keeps one node-local DP group per node.
+        self.assertNotIn("nnodes", configs["prefill"][1])
+        self.assertEqual(configs["prefill"][1]["data-parallel-start-rank"], 2)
+
 
     def test_materialization_writes_complete_config_for_every_node(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

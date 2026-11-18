@@ -327,7 +327,9 @@ def build_vllm_instance_configs(
     pp_size = int(resolved["topology"].get("pipeline_parallel_size", 1))
     if pp_size > 1:
         if mode != "single":
-            raise ValueError("pipeline parallelism is supported only in single serving mode")
+            raise ValueError(
+                "set pipeline_parallel_size per role in disaggregated mode, not in the topology"
+            )
         return {
             "single": pipeline_instance_configs(
                 resolved["server"],
@@ -354,8 +356,9 @@ def build_vllm_instance_configs(
         roles = {
             role: {
                 "nodes": int(deployments[role]["nodes"]),
-                # A role may set its own tensor parallelism; DP fills the role's GPUs.
+                # A role may set its own tensor and pipeline parallelism; DP fills the role's GPUs.
                 "tp": int(deployments[role].get("tensor_parallel_size", tp_size)),
+                "pp": int(deployments[role].get("pipeline_parallel_size", 1)),
                 "api_port": int(deployments[role]["api_port"]),
                 "rpc_port": int(deployments[role]["rpc_port"]),
                 "server": deep_merge(
@@ -371,32 +374,55 @@ def build_vllm_instance_configs(
     for role, deployment in roles.items():
         role_nodes = int(deployment["nodes"])
         role_tp = int(deployment.get("tp", tp_size))
-        if gpus_per_node % role_tp:
+        role_pp = int(deployment.get("pp", 1))
+        replica_gpus = role_tp * role_pp
+        # A replica (one DP rank: TP x PP GPUs) either fits in a node or spans whole nodes.
+        if gpus_per_node % replica_gpus and replica_gpus % gpus_per_node:
             raise ValueError(
-                f"{role}: gpus_per_node={gpus_per_node} is not divisible by "
-                f"tensor_parallel_size={role_tp}"
+                f"{role}: TP={role_tp} x PP={role_pp} must divide or be a multiple of "
+                f"gpus_per_node={gpus_per_node}"
             )
-        dp_local = gpus_per_node // role_tp
-        dp_total = role_nodes * dp_local
-        common = deep_merge(
-            deployment["server"],
-            {
-                "tensor-parallel-size": role_tp,
-                "data-parallel-size": dp_total,
-                "data-parallel-size-local": dp_local,
-                "data-parallel-address": heads[role],
-                "data-parallel-rpc-port": int(deployment["rpc_port"]),
-            },
-        )
+        nodes_per_replica = max(replica_gpus // gpus_per_node, 1)
+        if role_nodes % nodes_per_replica:
+            raise ValueError(
+                f"{role}: a TP={role_tp} x PP={role_pp} replica spans {nodes_per_replica} nodes, "
+                f"which does not divide the role's {role_nodes} nodes"
+            )
+        dp_total = role_nodes * gpus_per_node // replica_gpus
+        dp_local = max(gpus_per_node // replica_gpus, 1)
+        parallel = {
+            "tensor-parallel-size": role_tp,
+            "data-parallel-size": dp_total,
+            "data-parallel-size-local": dp_local,
+            "data-parallel-address": heads[role],
+            "data-parallel-rpc-port": int(deployment["rpc_port"]),
+        }
+        if role_pp > 1:
+            parallel["pipeline-parallel-size"] = role_pp
+        if nodes_per_replica > 1:
+            # Replicas span nodes: vLLM's mp backend joins the role's nodes into one torch
+            # world (master on the role head) and infers each node's DP rank from --node-rank.
+            parallel.update(
+                {
+                    "distributed-executor-backend": "mp",
+                    "nnodes": role_nodes,
+                    "master-addr": heads[role],
+                    "master-port": int(deployment["rpc_port"]) + 1000,
+                }
+            )
+        common = deep_merge(deployment["server"], parallel)
         configs[role] = {}
         for node_rank in range(role_nodes):
             config = deepcopy(common)
+            if nodes_per_replica > 1:
+                config["node-rank"] = node_rank
             if node_rank == 0:
                 config["host"] = "0.0.0.0"
                 config["port"] = int(deployment["api_port"])
             else:
                 config["headless"] = True
-                config["data-parallel-start-rank"] = node_rank * dp_local
+                if nodes_per_replica == 1:
+                    config["data-parallel-start-rank"] = node_rank * dp_local
             configs[role][node_rank] = config
     return configs
 
@@ -536,6 +562,8 @@ def materialize_scenario(
                 "PREFILL_NODES": str(deployments["prefill"]["nodes"]),
                 "PREFILL_TP_SIZE": str(deployments["prefill"].get("tensor_parallel_size", tp_size)),
                 "DECODE_TP_SIZE": str(deployments["decode"].get("tensor_parallel_size", tp_size)),
+                "PREFILL_PP_SIZE": str(deployments["prefill"].get("pipeline_parallel_size", 1)),
+                "DECODE_PP_SIZE": str(deployments["decode"].get("pipeline_parallel_size", 1)),
                 "DECODE_NODES": str(deployments["decode"]["nodes"]),
                 "PREFILL_API_PORT": str(deployments["prefill"]["api_port"]),
                 "DECODE_API_PORT": str(deployments["decode"]["api_port"]),
