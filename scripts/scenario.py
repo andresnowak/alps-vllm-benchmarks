@@ -76,6 +76,32 @@ def to_yaml(value: Any, indent: int = 0) -> str:
     return "\n".join(lines)
 
 
+# vLLM 0.31 boolean flags that are plain store_true, so they have no `--no-` form.
+STORE_TRUE_FLAGS = frozenset(
+    {
+        "aggregate-engine-logging",
+        "data-parallel-multi-port-external-lb",
+        "disable-log-stats",
+    }
+)
+
+
+# Spell top-level `false` flags as `no-<flag>: true` for `vllm serve --config`.
+# vLLM expands the file in its top-level parser, which does not know the serve
+# subcommand's `--no-<flag>` options, so it silently drops every `false` and the
+# vLLM default applies (prefix caching and async scheduling stayed on). A `true`
+# is always passed through as `--<flag>`. Store-true flags keep `false`: their
+# default is already off.
+def vllm_config_file(config: dict[str, Any]) -> dict[str, Any]:
+    spelled: dict[str, Any] = {}
+    for key, item in config.items():
+        if item is False and key not in STORE_TRUE_FLAGS:
+            spelled[f"no-{key}"] = True
+        else:
+            spelled[key] = item
+    return spelled
+
+
 # Atomically write a generated vLLM YAML configuration.
 def write_yaml(path: Path, value: Any) -> None:
     atomic_text(path, to_yaml(value) + "\n")
@@ -446,7 +472,7 @@ def materialize_scenario(
         config_records[role] = {}
         for node_rank, config in node_configs.items():
             config_path = output_dir / f"vllm-{role}-node{node_rank}.yaml"
-            write_yaml(config_path, config)
+            write_yaml(config_path, vllm_config_file(config))
             identity_config = deepcopy(config)
             for address in ("data-parallel-address", "master-addr"):
                 if address in identity_config:
