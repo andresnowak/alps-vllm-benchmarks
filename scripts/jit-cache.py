@@ -59,6 +59,8 @@ CACHE_ROOTS = {
 }
 # Rank-local autotune choices cannot be merged safely across nodes.
 EXCLUDED_ARCHIVE_PREFIXES = (PurePosixPath("vllm/flashinfer_autotune_cache"),)
+# Logs that every job appends to; nothing reuses them, and concurrent jobs always disagree on them.
+EXCLUDED_ARCHIVE_NAMES = frozenset({"flashinfer_jit.log"})
 # The versions of these packages are part of the cache compatibility key.
 PACKAGE_NAMES = (
     "vllm",
@@ -155,6 +157,8 @@ def reset_live_roots() -> None:
 
 # Check whether an archive path belongs to excluded rank-local state.
 def is_excluded_archive_path(path: PurePosixPath) -> bool:
+    if path.name in EXCLUDED_ARCHIVE_NAMES:
+        return True
     return any(path == prefix or prefix in path.parents for prefix in EXCLUDED_ARCHIVE_PREFIXES)
 
 
@@ -636,8 +640,15 @@ def publish_bundles(staging: Path, expected: int) -> dict[str, Any]:
         for metadata, archive in bundles:
             base_generation = metadata.get("base_generation")
             base_files = load_generation_files(namespace, base_generation)
+            # Bundles from agents that started before an exclusion was added may still carry
+            # excluded paths; leave them out of the merge.
+            job_files = {
+                path: value
+                for path, value in metadata["files"].items()
+                if not is_excluded_archive_path(PurePosixPath(path))
+            }
             merged_files, accepted, bundle_conflicts = merge_bundle_files(
-                base_files, merged_files, metadata["files"]
+                base_files, merged_files, job_files
             )
             accepted_by_archive.append((archive, set(accepted)))
             # Nodes in one job may compile the same file with different bytes. When the version
