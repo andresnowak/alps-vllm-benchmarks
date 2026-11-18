@@ -94,7 +94,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 
 | Scenario | Change | Constraints or notes |
 |---|---|---|
-| `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off |
+| `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off; async scheduling on |
 | `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA pins `deep_gemm`, GPU memory 0.90; decode-oriented 1024-token scheduler cap |
 | `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; CUDA pins `deep_gemm`, while ROCm retains its platform backend selection |
 | `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable with baseline or low-latency all-to-all |
@@ -105,7 +105,6 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `speculative-mtp` | MTP speculative decoding | Three speculative tokens |
 | `prefix-caching` | Local GPU prefix cache | No external KV connector |
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
-| `async-scheduling` | Async scheduling | Overlaps CPU scheduling and accelerator execution |
 | `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; not composable |
 | `production` | External production vLLM parity | Exactly four CUDA nodes, TP=4/DCP=4, 1M context, FP8 KV cache, 32 sequences, 4096-token scheduler cap, and one MTP token |
 | `million-context` | Experimental vLLM 0.30 capacity reproducer | Exactly four CUDA nodes, TP=4, FP8 KV cache, native CPU KV offload; currently fails startup without DCP |

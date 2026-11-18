@@ -28,7 +28,7 @@
     "all2all-backend": "allgather_reducescatter",
     "enable-eplb": false,
     "enable-dbo": false,
-    "async-scheduling": false,
+    "async-scheduling": true,
     "disable-custom-all-reduce": false,
     "enforce-eager": false,
     "cpu-offload-gb": 0,
@@ -58,7 +58,8 @@
     "kv_cpu_offload": false,
     "weight_cpu_offload": false,
     "speculative_decoding": false,
-    "disaggregated_prefill_decode": false
+    "disaggregated_prefill_decode": false,
+    "async_scheduling": true
   },
   "services": {}
 }
