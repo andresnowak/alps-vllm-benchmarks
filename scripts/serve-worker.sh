@@ -50,11 +50,15 @@ else
     echo "SERVING_MODE=disaggregated requires DEPLOYMENT_ROLE=prefill|decode, got '${role}'" >&2
     exit 2
   fi
+  # Each role may use its own tensor parallelism.
   if [[ "${role}" == "prefill" ]]; then
+    TP_SIZE="${PREFILL_TP_SIZE:-${TP_SIZE}}"
     DP_TOTAL=$((PREFILL_NODES * GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
   else
+    TP_SIZE="${DECODE_TP_SIZE:-${TP_SIZE}}"
     DP_TOTAL=$((DECODE_NODES * GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
   fi
+  DP_LOCAL=$((GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
 fi
 CONFIG="${SCENARIO_VLLM_CONFIG_DIR}/vllm-${role}-node${NODE_RANK}.yaml"
 [[ -f "${CONFIG}" ]] || { echo "vLLM config is missing: ${CONFIG}" >&2; exit 2; }

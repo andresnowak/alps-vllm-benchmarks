@@ -328,6 +328,8 @@ def build_vllm_instance_configs(
         roles = {
             role: {
                 "nodes": int(deployments[role]["nodes"]),
+                # A role may set its own tensor parallelism; DP fills the role's GPUs.
+                "tp": int(deployments[role].get("tensor_parallel_size", tp_size)),
                 "api_port": int(deployments[role]["api_port"]),
                 "rpc_port": int(deployments[role]["rpc_port"]),
                 "server": deep_merge(
@@ -342,11 +344,18 @@ def build_vllm_instance_configs(
     configs: dict[str, dict[int, dict[str, Any]]] = {}
     for role, deployment in roles.items():
         role_nodes = int(deployment["nodes"])
+        role_tp = int(deployment.get("tp", tp_size))
+        if gpus_per_node % role_tp:
+            raise ValueError(
+                f"{role}: gpus_per_node={gpus_per_node} is not divisible by "
+                f"tensor_parallel_size={role_tp}"
+            )
+        dp_local = gpus_per_node // role_tp
         dp_total = role_nodes * dp_local
         common = deep_merge(
             deployment["server"],
             {
-                "tensor-parallel-size": tp_size,
+                "tensor-parallel-size": role_tp,
                 "data-parallel-size": dp_total,
                 "data-parallel-size-local": dp_local,
                 "data-parallel-address": heads[role],
@@ -499,6 +508,8 @@ def materialize_scenario(
                 "PREFILL_HEAD_IP": heads["prefill"],
                 "DECODE_HEAD_IP": heads["decode"],
                 "PREFILL_NODES": str(deployments["prefill"]["nodes"]),
+                "PREFILL_TP_SIZE": str(deployments["prefill"].get("tensor_parallel_size", tp_size)),
+                "DECODE_TP_SIZE": str(deployments["decode"].get("tensor_parallel_size", tp_size)),
                 "DECODE_NODES": str(deployments["decode"]["nodes"]),
                 "PREFILL_API_PORT": str(deployments["prefill"]["api_port"]),
                 "DECODE_API_PORT": str(deployments["decode"]["api_port"]),
