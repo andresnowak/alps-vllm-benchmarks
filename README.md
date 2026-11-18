@@ -97,6 +97,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off; async scheduling on |
 | `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA pins `deep_gemm`, GPU memory 0.90; decode-oriented 1024-token scheduler cap |
 | `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; CUDA pins `deep_gemm`, while ROCm retains its platform backend selection |
+| `uccl-ht-4096` | `uccl-ht` with a 4096-token step | Fewer prefill steps per long prompt; each HT step pays a large fixed cost |
 | `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable with baseline or low-latency all-to-all |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
 | `eplb` | Expert load balancing | 32 redundant experts with the Gloo communicator |
