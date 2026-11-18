@@ -286,6 +286,15 @@ sample standard deviation of each run-level metric. `bencher.json` publishes tha
 `lower_value` and `upper_value` set to one sample standard deviation below and above it. The batch
 script requests four hours to accommodate the warmup and three separate timed passes.
 
+Around every warmup and measured invocation the harness also reads vLLM's `/metrics` from the
+engines (the server, or both roles in PD; the proxy has none) and keeps the difference. The
+client sees only the whole TTFT; the server splits it into the time a request waited before it
+started running (`vllm:request_queue_time_seconds`) and its prefill
+(`vllm:request_prefill_time_seconds`). The manifest records mean and estimated p50/p90/p99 of
+both and of the server-side TTFT for every repetition and engine role, with prefix-cache counts;
+`summary.tsv` adds `server_mean_queue_ms`, `server_p99_queue_ms` and `server_mean_prefill_ms`
+(the prefill role in PD). Percentiles come from vLLM's histogram buckets, so they are approximate.
+
 Slurm output uses UTC `[status ...]` lines for scenario materialization, worker launch, readiness,
 smoke, cache publication, and benchmark phases. Readiness reports once per minute. Every warmup,
 measurement, or cache-publication subprocess reports a heartbeat every 60 seconds and a completion

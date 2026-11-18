@@ -27,6 +27,7 @@ from provenance import (
     stable_runtime_identity,
 )
 from script_utils import atomic_json, canonical_sha256, file_sha256
+import server_metrics
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_TEMPERATURE = 0.0
@@ -57,6 +58,11 @@ SUMMARY_FIELDS = (
     "mean_tpot_ms_sample_stddev",
     "p99_tpot_ms",
     "p99_tpot_ms_sample_stddev",
+    # From the server's /metrics: how long requests waited before they started running, and
+    # how long their prefill took (the prefill role in PD). Means over the repetitions.
+    "server_mean_queue_ms",
+    "server_p99_queue_ms",
+    "server_mean_prefill_ms",
 )
 BENCHER_MEASURES = {
     "request_throughput": "request-throughput-req-per-sec",
@@ -350,6 +356,20 @@ def load_benchmark_result(
     return result, total_input_tokens
 
 
+# Mean over the repetitions of the server-side queue and prefill times; blank if no repetition
+# had metrics.
+def server_summary(records: list[dict[str, Any] | None]) -> dict[str, float | None]:
+    def mean(histogram: str, field: str) -> float | None:
+        values = [r[histogram][field] for r in records if r and r[histogram][field] is not None]
+        return statistics.fmean(values) if values else None
+
+    return {
+        "server_mean_queue_ms": mean("queue", "mean_ms"),
+        "server_p99_queue_ms": mean("queue", "p99_ms"),
+        "server_mean_prefill_ms": mean("prefill", "mean_ms"),
+    }
+
+
 # Aggregate independent suite passes and expose their run-to-run variation.
 def aggregate_measurements(
     name: str,
@@ -628,6 +648,10 @@ def main() -> int:
         "phase": "after-full-suite-warmup",
     }
     token_alignment = verify_token_alignment(args.base_url, args.served_model_name)
+    # Queue and prefill times come from the engines that schedule the prompts: the server, or
+    # the prefill role in PD (the proxy has no metrics).
+    metric_urls = server_metrics.endpoints(args.base_url)
+    queue_role = "prefill" if "prefill" in metric_urls else "server"
     suite_identity = {
         "path": str(
             suite_path.relative_to(ROOT) if suite_path.is_relative_to(ROOT) else suite_path
@@ -760,6 +784,7 @@ def main() -> int:
                 f"concurrency={point['concurrency']}"
             )
             warmup_file = warmup_dir / f"{point['name']}.json"
+            metrics_before = server_metrics.scrape_all(metric_urls)
             command = build_benchmark_command(
                 args,
                 warmup,
@@ -779,6 +804,9 @@ def main() -> int:
                     "raw_result": str(warmup_file.relative_to(output_dir)),
                     "raw_sha256": file_sha256(warmup_file),
                     "command": command,
+                    "server_metrics": server_metrics.difference_all(
+                        metrics_before, server_metrics.scrape_all(metric_urls)
+                    ),
                 }
             )
             atomic_json(output_dir / "manifest.json", manifest)
@@ -797,6 +825,9 @@ def main() -> int:
         )
 
         measurements: dict[str, list[dict[str, Any]]] = {}
+        server_measures: dict[str, list[dict[str, Any] | None]] = {
+            point["name"]: [] for point in points
+        }
         point_records: dict[str, dict[str, Any]] = {}
         for point in points:
             effective_input_len = (
@@ -837,6 +868,7 @@ def main() -> int:
                 raw_file = (
                     raw_dir / point["name"] / f"repetition-{repetition}.json"
                 )
+                metrics_before = server_metrics.scrape_all(metric_urls)
                 command = build_benchmark_command(
                     args,
                     point,
@@ -848,6 +880,10 @@ def main() -> int:
                 result, total_input_tokens = load_benchmark_result(
                     raw_file, point, effective_input_len
                 )
+                point_metrics = server_metrics.difference_all(
+                    metrics_before, server_metrics.scrape_all(metric_urls)
+                )
+                server_measures[point["name"]].append(point_metrics.get(queue_role))
                 missing_metrics = BENCHER_MEASURES.keys() - result.keys()
                 if missing_metrics:
                     raise RuntimeError(
@@ -862,6 +898,7 @@ def main() -> int:
                         "raw_result": str(raw_file.relative_to(output_dir)),
                         "raw_sha256": file_sha256(raw_file),
                         "command": command,
+                        "server_metrics": point_metrics,
                     }
                 )
                 atomic_json(output_dir / "manifest.json", manifest)
@@ -880,6 +917,7 @@ def main() -> int:
                     "repetitions": args.repetitions,
                     "total_prompts": point["prompts"] * args.repetitions,
                     **aggregate,
+                    **server_summary(server_measures[point["name"]]),
                 }
             )
             bencher[point["name"]] = bencher_measures
