@@ -169,7 +169,8 @@ def safe_member_path(name: str) -> PurePosixPath:
         raise ValueError(f"unsafe archive member path: {name!r}")
     if member.parts[0] not in CACHE_ROOTS:
         raise ValueError(f"unknown archive cache root: {name!r}")
-    if is_excluded_archive_path(member):
+    # Excluded logs are only skipped: agents older than the exclusion still archive them.
+    if is_excluded_archive_path(member) and member.name not in EXCLUDED_ARCHIVE_NAMES:
         raise ValueError(f"excluded cache entry in archive: {name!r}")
     return member
 
@@ -180,7 +181,7 @@ def archive_file_manifest(archive: Path) -> dict[str, dict[str, Any]]:
     with tarfile.open(archive, "r") as bundle:
         for member in bundle:
             path = safe_member_path(member.name)
-            if member.isdir():
+            if member.isdir() or path.name in EXCLUDED_ARCHIVE_NAMES:
                 continue
             if not member.isfile():
                 raise ValueError(f"unsupported archive member type: {member.name!r}")
@@ -212,8 +213,14 @@ def validate_archive(
 ) -> None:
     if file_sha256(archive) != descriptor["sha256"]:
         raise ValueError(f"archive checksum mismatch: {archive}")
-    if expected_files is not None and archive_file_manifest(archive) != expected_files:
-        raise ValueError(f"archive file manifest mismatch: {archive}")
+    if expected_files is not None:
+        expected = {
+            path: value
+            for path, value in expected_files.items()
+            if PurePosixPath(path).name not in EXCLUDED_ARCHIVE_NAMES
+        }
+        if archive_file_manifest(archive) != expected:
+            raise ValueError(f"archive file manifest mismatch: {archive}")
 
 
 # Extract one archive member through an atomic file replacement.
