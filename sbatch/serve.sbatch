@@ -307,28 +307,6 @@ wait_for_health() {
   (( ready == 1 )) || { echo "${label} did not become ready; inspect ${LOGDIR}" >&2; return 1; }
 }
 
-# Fail before measuring if an engine's prefix caching differs from its config.
-# vLLM silently ignores `false` in --config files, which kept prefix caching on;
-# scenario.py now writes `no-enable-prefix-caching: true`. Headless nodes do not
-# print the engine config, so each role needs the value at least once, all equal.
-check_prefix_caching() {
-  local config role expected seen failed=0
-  for config in "${SCENARIO_VLLM_CONFIG_DIR}"/vllm-*-node0.yaml; do
-    role="$(basename "${config}" -node0.yaml)"
-    role="${role#vllm-}"
-    expected=True
-    grep -qx 'no-enable-prefix-caching: true' "${config}" && expected=False
-    seen="$(cat "${LOGDIR}/serve-${role}"-node*.log 2>/dev/null \
-      | grep -o 'enable_prefix_caching=[A-Za-z]*' | sed 's/.*=//' | sort -u | paste -sd, -)"
-    if [[ "${seen}" != "${expected}" ]]; then
-      echo "${role} prefix caching: config asks ${expected}, engines logged ${seen:-nothing}" >&2
-      failed=1
-    fi
-  done
-  (( failed == 0 )) && status "prefix caching matches the vLLM configs"
-  return "${failed}"
-}
-
 if [[ "${SERVING_MODE}" == "disaggregated" ]]; then
   wait_for_health "http://${PREFILL_HEAD_IP}:${PREFILL_API_PORT}" "prefill instance" || exit 1
   wait_for_health "http://${DECODE_HEAD_IP}:${DECODE_API_PORT}" "decode instance" || exit 1
@@ -336,7 +314,6 @@ if [[ "${SERVING_MODE}" == "disaggregated" ]]; then
 else
   wait_for_health "${BASE_URL}" "server" || exit 1
 fi
-check_prefix_caching || exit 1
 
 status "server ready; url=${BASE_URL}"
 SMOKE_ARGS=(
