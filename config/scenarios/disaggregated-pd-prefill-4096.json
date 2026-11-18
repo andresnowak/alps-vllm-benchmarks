@@ -1,0 +1,65 @@
+{
+  "id": "disaggregated-pd-prefill-4096",
+  "description": "Four-node prefill (TP2 x DP8, HT) and four-node decode (TP2 x DP8, LL) deployments joined by Mooncake direct KV transfer, with a 4096-token prefill step budget and 32 decode sequences per engine; both roles are EP16.",
+  "mode": "disaggregated",
+  "constraints": {
+    "platforms": ["cuda"]
+  },
+  "features": {
+    "external_kv_transfer": true,
+    "disaggregated_prefill_decode": "mooncake",
+    "moe_backend": "deep_gemm"
+  },
+  "environment": {
+    "FI_PROVIDER": "cxi",
+    "UCCL_EP_TRANSPORT": "cxi",
+    "FI_CXI_ENABLE_WRITEDATA": "1",
+    "UCCL_EP_CPU_TIMEOUT_SECS": "600",
+    "UCCL_EP_DISPATCH_CONFIG": "20,16,512,16,1024",
+    "UCCL_EP_COMBINE_CONFIG": "20,1,512,16,512",
+    "VLLM_DEEPEP_BUFFER_SIZE_MB": "1024",
+    "VLLM_MOONCAKE_CONNECTOR_TIMEOUT": "120"
+  },
+  "deployments": {
+    "prefill": {
+      "nodes": 4,
+      "api_port": 8100,
+      "rpc_port": 13345,
+      "bootstrap_port": 8998,
+      "server": {
+        "all2all-backend": "deepep_high_throughput",
+        "kv-transfer-config": {
+          "kv_connector": "MooncakeConnector",
+          "kv_role": "kv_producer",
+          "kv_connector_extra_config": {
+            "mooncake_protocol": "cxi"
+          }
+        },
+        "moe-backend": "deep_gemm",
+        "max-num-batched-tokens": 4096
+      }
+    },
+    "decode": {
+      "nodes": 4,
+      "api_port": 8200,
+      "rpc_port": 13346,
+      "server": {
+        "all2all-backend": "deepep_low_latency",
+        "gpu-memory-utilization": 0.9,
+        "max-num-seqs": 32,
+        "max-num-batched-tokens": 32,
+        "kv-transfer-config": {
+          "kv_connector": "MooncakeConnector",
+          "kv_role": "kv_consumer",
+          "kv_connector_extra_config": {
+            "mooncake_protocol": "cxi"
+          }
+        },
+        "moe-backend": "deep_gemm"
+      }
+    },
+    "proxy": {
+      "port": 8000
+    }
+  }
+}

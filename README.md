@@ -107,6 +107,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
 | `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; not composable |
 | `disaggregated-pd-prefill-no-async` | `disaggregated-pd` with async scheduling off on prefill | With async scheduling, the prefill engine marks KV ready to send one (eager HT) step late; decode keeps async scheduling |
+| `disaggregated-pd-prefill-4096` | `disaggregated-pd` with a 4096-token prefill step and 32 decode sequences | Doubles the prefill `max-num-batched-tokens` from 2048, and decode `max-num-seqs` (and its equal batch budget) from 16 to 32 per engine |
 | `production` | External production vLLM parity | Exactly four CUDA nodes, TP=4/DCP=4, 1M context, FP8 KV cache, 32 sequences, 4096-token scheduler cap, and one MTP token |
 | `million-context` | Experimental vLLM 0.30 capacity reproducer | Exactly four CUDA nodes, TP=4, FP8 KV cache, native CPU KV offload; currently fails startup without DCP |
 
