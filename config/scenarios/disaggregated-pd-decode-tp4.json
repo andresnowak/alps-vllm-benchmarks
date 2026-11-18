@@ -46,7 +46,8 @@
       "server": {
         "all2all-backend": "deepep_low_latency",
         "gpu-memory-utilization": 0.9,
-        "max-num-batched-tokens": 256,
+        "max-num-seqs": 16,
+        "max-num-batched-tokens": 16,
         "kv-transfer-config": {
           "kv_connector": "MooncakeConnector",
           "kv_role": "kv_consumer",

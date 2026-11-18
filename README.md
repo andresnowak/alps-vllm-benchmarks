@@ -146,8 +146,9 @@ single-request paging is supported and verified.
 
 Evidence from the predecessor investigation found the high-throughput backend unsuitable for
 decode, but `uccl-ht` remains available as a prefill-heavy experiment on either platform.
-`disaggregated-pd` uses high throughput for prefill and low latency with the same 1024-token cap
-and 0.90 CUDA memory utilization for decode.
+`disaggregated-pd` uses high throughput for prefill and low latency with 0.90 CUDA memory
+utilization for decode. A decode step carries one token per running sequence, so decode sets
+`max-num-batched-tokens` equal to `max-num-seqs` (16); DeepEP LL sizes its buffers from that cap.
 
 ## Submit serving
 
