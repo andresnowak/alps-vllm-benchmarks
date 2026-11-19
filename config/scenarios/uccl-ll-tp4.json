@@ -1,6 +1,6 @@
 {
   "id": "uccl-ll-tp4",
-  "description": "UCCL-EP low-latency all-to-all with TP4 x DP4 (EP16) on four nodes and 64 sequences per engine, so four engines hold the decode suite's 256 requests.",
+  "description": "UCCL-EP low-latency all-to-all with TP4 x DP4 (EP16) on four nodes and 64 sequences per engine, so four engines hold the decode suite's 256 requests. The step budget (max-num-batched-tokens) is 256: DeepEP low-latency reserves its RDMA buffer from it, 12.6 MB per GPU per token, so the old 1024 took about 12 GiB from the KV cache. It is not set to the sequence cap as in the PD decode roles, because single-mode engines also prefill: with every slot decoding, a budget equal to the slots leaves almost no tokens for a new prompt. 256 leaves room for prefill, keeps the buffer at about 3 GiB, and lets every slot fit in the KV cache.",
   "constraints": {
     "exact_nodes": 4
   },
@@ -10,7 +10,7 @@
   "server": {
     "all2all-backend": "deepep_low_latency",
     "gpu-memory-utilization": 0.9,
-    "max-num-batched-tokens": 1024,
+    "max-num-batched-tokens": 256,
     "max-num-seqs": 64
   },
   "environment": {

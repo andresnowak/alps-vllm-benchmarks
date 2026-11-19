@@ -120,16 +120,27 @@ class ScenarioAllocationTests(unittest.TestCase):
             0.7,
         )
 
-    def test_uccl_ll_keeps_1k_rdma_capacity_after_2k_oom(self) -> None:
-        baseline = resolve_scenario("baseline", "cuda")
-        resolved = resolve_scenario("uccl-ll", "cuda")
-        composed = resolve_scenario("uccl-ll+moe-deep-gemm", "cuda")
+    def test_low_latency_step_budget_follows_the_sequence_cap(self) -> None:
+        def steps(name: str) -> tuple[int, int]:
+            server = resolve_scenario(name, "cuda")["server"]
+            return server["max-num-seqs"], server["max-num-batched-tokens"]
 
-        self.assertEqual(baseline["server"]["max-num-batched-tokens"], 2048)
-        self.assertEqual(resolved["server"]["max-num-batched-tokens"], 1024)
-        self.assertEqual(composed["server"]["max-num-batched-tokens"], 1024)
-        self.assertEqual(resolved["server"]["gpu-memory-utilization"], 0.9)
-        self.assertEqual(composed["server"]["gpu-memory-utilization"], 0.9)
+        # Single-mode LL engines also prefill, so they keep a 256-token budget (3 GiB of LL buffer).
+        self.assertEqual(steps("uccl-ll"), (16, 256))
+        self.assertEqual(steps("uccl-ll+moe-deep-gemm"), (16, 256))
+        self.assertEqual(steps("uccl-ll-tp4"), (64, 256))
+        self.assertEqual(steps("uccl-ll-tp4-dbo"), (64, 256))
+        self.assertEqual(steps("uccl-ll+seqs-32"), (32, 256))
+        # The budget rises to the decode floor, sequences x (1 + speculative tokens), when needed.
+        self.assertEqual(steps("uccl-ll-tp4+speculative-mtp"), (64, 256))
+        self.assertEqual(steps("uccl-ll+seqs-256+speculative-mtp"), (256, 1024))
+        # A larger explicit budget is kept, and other backends are untouched.
+        self.assertEqual(steps("uccl-ll+million-context"), (1, 1024))
+        self.assertEqual(steps("seqs-32"), (32, 2048))
+        self.assertEqual(steps("uccl-ht"), (16, 2048))
+        decode = resolve_scenario("disaggregated-pd", "cuda")["deployments"]["decode"]["server"]
+        self.assertEqual((decode["max-num-seqs"], decode["max-num-batched-tokens"]), (16, 16))
+        self.assertEqual(resolve_scenario("uccl-ll", "cuda")["server"]["gpu-memory-utilization"], 0.9)
 
     def test_million_context_profile_uses_tp4_and_fp8_kv_cache(self) -> None:
         resolved = resolve_scenario("uccl-ll+million-context", "cuda")

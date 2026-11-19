@@ -126,7 +126,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | Scenario | Change | Constraints or notes |
 |---|---|---|
 | `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off; async scheduling on |
-| `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA pins `deep_gemm`, GPU memory 0.90; decode-oriented 1024-token scheduler cap |
+| `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA pins `deep_gemm`, GPU memory 0.90; 256-token step budget (small LL buffers) |
 | `uccl-ll-tp4` | `uccl-ll` with TP4 x DP4 (EP16) and 64 sequences per engine | Four engines hold the decode suite's 256 requests; control for `uccl-ll-tp4-dbo` |
 | `uccl-ll-tp4-dbo` | `uccl-ll-tp4` with dual batch overlap on decode | Splits decode steps above 16 tokens (c128 and up) into two micro-batches so one's LL all-to-all overlaps the other's compute |
 | `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; CUDA pins `deep_gemm`, while ROCm retains its platform backend selection |
@@ -164,11 +164,16 @@ DeepGEMM with `DeepEPHTPrepareAndFinalize`. DeepEP HT and LL both need DeepGEMM 
 `uccl-ht`, `uccl-ll`, and both `disaggregated-pd` roles pin it. ROCm retains its platform-native
 MoE selection. Use `moe-deep-gemm` to pin DeepGEMM in other CUDA runs.
 
-`uccl-ll` retains `max-num-batched-tokens=1024`. Job 5037516 tested 2048 with CUDA GPU
-memory utilization 0.90 and still exhausted GPU memory during startup. DeepEP sizes its
-low-latency RDMA workspace from this capacity, so raising the scheduler cap consumes memory before
-the server can allocate its required KV cache. The one-million-token profile also uses the proven
-1024-token cap.
+DeepEP low-latency sizes its RDMA buffers from `max-num-batched-tokens`: for GLM-5.3 about
+12.6 MB per token per GPU, so a 1024-token budget took about 12 GiB from the KV cache (job
+5037516 ran out of memory at 2048). A decode step carries one token per running sequence, so the
+PD decode roles, which never prefill, set the budget equal to their sequence cap (16 or 32). The
+single-mode LL scenarios (`uccl-ll`, `uccl-ll-tp4`) use 256 tokens: their engines also prefill,
+and with every slot decoding a budget equal to the slots would leave almost no tokens for a new
+prompt. 256 keeps room for prefill, keeps the buffer at about 3 GiB, and lets every slot fit in the
+KV cache. The resolver (`size_low_latency_steps` in `scripts/scenario.py`) raises the budget to
+`max-num-seqs x (1 + speculative tokens)` when a later layer adds sequences or MTP tokens, as
+vLLM requires, and keeps a larger explicit budget such as the one-million-token profile's 1024.
 
 `uccl-ll+million-context` records the attempted native 1,048,576-token target on four GH200 nodes;
 it is a failure reproducer, not a supported serving profile. Job 5037564 measured only

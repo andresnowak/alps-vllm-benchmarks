@@ -190,7 +190,28 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
         raise ValueError(f"unsupported serving mode: {mode}")
     if mode == "disaggregated" and len(effective_components) != 1:
         raise ValueError("disaggregated-pd cannot be composed with another scenario")
+    size_low_latency_steps(resolved["server"])
+    for deployment in resolved.get("deployments", {}).values():
+        if isinstance(deployment, dict) and "server" in deployment:
+            size_low_latency_steps(deployment["server"], resolved["server"])
     return resolved
+
+
+# DeepEP low-latency sizes its RDMA buffers from max-num-batched-tokens: about 12.6 MB per token
+# per GPU for GLM-5.3, so 1024 tokens take about 12 GiB from the KV cache. A decode step carries
+# one token per running sequence (k+1 with k speculative tokens): PD decode roles, which never
+# prefill, set the budget to their sequence cap; single-mode LL scenarios use 256 so new prompts
+# still get prefill tokens while every slot decodes. This raises the budget to the decode floor
+# when a later layer adds sequences or speculative tokens, as vLLM requires
+# max-num-batched-tokens >= max-num-seqs; a larger budget (e.g. million-context) is kept.
+def size_low_latency_steps(server: dict[str, Any], base: dict[str, Any] | None = None) -> None:
+    effective = {**(base or {}), **server}
+    if effective.get("all2all-backend") != "deepep_low_latency":
+        return
+    speculative = effective.get("speculative-config") or {}
+    floor = int(effective["max-num-seqs"]) * (1 + int(speculative.get("num_speculative_tokens", 0)))
+    if int(effective["max-num-batched-tokens"]) < floor:
+        server["max-num-batched-tokens"] = floor
 
 
 # Sum role-assigned nodes for a disaggregated scenario.

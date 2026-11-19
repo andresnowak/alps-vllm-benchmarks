@@ -1,10 +1,11 @@
 {
   "id": "uccl-ll",
-  "description": "UCCL-EP through the DeepEP-compatible low-latency backend for decode-heavy traffic.",
+  "description": "UCCL-EP through the DeepEP-compatible low-latency backend for decode-heavy traffic, 16 sequences per engine. The step budget (max-num-batched-tokens) is 256: DeepEP low-latency reserves its RDMA buffer from it, 12.6 MB per GPU per token, so the old 1024 took about 12 GiB from the KV cache. It is not set to the sequence cap as in the PD decode roles, because single-mode engines also prefill: with every slot decoding, a budget equal to the slots leaves almost no tokens for a new prompt. 256 leaves room for prefill, keeps the buffer at about 3 GiB, and lets every slot fit in the KV cache.",
   "server": {
     "all2all-backend": "deepep_low_latency",
     "gpu-memory-utilization": 0.9,
-    "max-num-batched-tokens": 1024
+    "max-num-seqs": 16,
+    "max-num-batched-tokens": 256
   },
   "environment": {
     "FI_PROVIDER": "cxi",

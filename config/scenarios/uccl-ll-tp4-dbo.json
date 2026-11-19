@@ -1,6 +1,6 @@
 {
   "id": "uccl-ll-tp4-dbo",
-  "description": "uccl-ll-tp4 with dual batch overlap: a decode step above 16 tokens splits into two micro-batches, so one's LL all-to-all overlaps the other's compute.",
+  "description": "uccl-ll-tp4 with dual batch overlap: a decode step above 16 tokens splits into two micro-batches, so one's LL all-to-all overlaps the other's compute. The step budget stays at uccl-ll-tp4's 256 tokens (see there for why).",
   "constraints": {
     "exact_nodes": 4
   },
@@ -10,7 +10,7 @@
   "server": {
     "all2all-backend": "deepep_low_latency",
     "gpu-memory-utilization": 0.9,
-    "max-num-batched-tokens": 1024,
+    "max-num-batched-tokens": 256,
     "max-num-seqs": 64,
     "enable-dbo": true,
     "dbo-decode-token-threshold": 16
