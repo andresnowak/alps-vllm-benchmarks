@@ -637,6 +637,25 @@ def publish_bundles(staging: Path, expected: int) -> dict[str, Any]:
 
     with publication_lock(namespace / "publish.lock", lock_seconds):
         current = current_generation(namespace)
+        # Pruning keeps only the newest generations. A job whose base is gone started from a
+        # cache that is too old to merge against, so it does not publish.
+        pruned = sorted(
+            {
+                metadata["base_generation"]
+                for metadata, _ in bundles
+                if metadata.get("base_generation")
+                and not (namespace / "generations" / metadata["base_generation"]).exists()
+            }
+        )
+        if pruned:
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "status": "stale",
+                "compatibility_key": identity_key,
+                "generation": current,
+                "reason": f"base generation pruned since hydration: {', '.join(pruned)}",
+                "publish_seconds": time.monotonic() - started,
+            }
         current_manifest = generation_manifest(namespace, current) if current else None
         merged_files = dict(current_manifest.get("files", {}) if current_manifest else {})
         accepted_by_archive: list[tuple[Path, set[str]]] = []
@@ -778,7 +797,9 @@ def publish(staging: Path, output: Path, expected: int, strict: bool) -> int:
         return 1 if strict else 0
     atomic_json(output, result)
     print(f"JIT cache publication: {result}", flush=True)
-    if result["status"] in {"published", "unchanged", "conflict"}:
+    if result["status"] == "stale":
+        print(f"WARNING: JIT cache not published, cache too stale: {result['reason']}", flush=True)
+    if result["status"] in {"published", "unchanged", "conflict", "stale"}:
         shutil.rmtree(staging, ignore_errors=True)
     return 0
 

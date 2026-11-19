@@ -7,6 +7,7 @@ import os
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -340,6 +341,29 @@ class PublicationTests(unittest.TestCase):
             extracted,
         )
         self.assertEqual((extracted / "triton/kernel.cubin").read_bytes(), b"canonical")
+
+    def test_job_whose_base_was_pruned_skips_publication(self) -> None:
+        first = self.root / "first"
+        first.mkdir()
+        self.make_bundle(first, "base", {"vllm/config.json": b"base"})
+        base_generation = jit_cache.publish_bundles(first, 1)["generation"]
+        # Three later publications (JIT_CACHE_KEEP_GENERATIONS=3) prune the long job's base.
+        for index in range(3):
+            later = self.root / f"later-{index}"
+            later.mkdir()
+            self.make_bundle(later, f"later-{index}", {f"triton/later-{index}.bin": b"x"})
+            time.sleep(1.1)  # generation names carry a one-second timestamp
+            latest = jit_cache.publish_bundles(later, 1)["generation"]
+        long_job = self.root / "long"
+        long_job.mkdir()
+        self.make_bundle(long_job, "long", {"triton/new.bin": b"new"}, base_generation=base_generation)
+        output = self.root / "publication.json"
+        self.assertEqual(jit_cache.publish(long_job, output, 1, strict=True), 0)
+        result = json.loads(output.read_text())
+        self.assertEqual(result["status"], "stale")
+        self.assertIn(base_generation, result["reason"])
+        namespace = jit_cache.namespace_path(result["compatibility_key"], platform_name="cuda")
+        self.assertEqual((namespace / "CURRENT").read_text().strip(), latest)
 
     def test_concurrent_divergent_update_leaves_current_unchanged(self) -> None:
         first = self.root / "first"
