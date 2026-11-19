@@ -97,6 +97,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off; async scheduling on |
 | `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA pins `deep_gemm`, GPU memory 0.90; decode-oriented 1024-token scheduler cap |
 | `uccl-ll-tp4` | `uccl-ll` with TP4 x DP4 (EP16) and 64 sequences per engine | Four engines hold the decode suite's 256 requests; control for `uccl-ll-tp4-dbo` |
+| `uccl-ll-tp4-dbo` | `uccl-ll-tp4` with dual batch overlap on decode | Splits decode steps above 16 tokens (c128 and up) into two micro-batches so one's LL all-to-all overlaps the other's compute |
 | `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; CUDA pins `deep_gemm`, while ROCm retains its platform backend selection |
 | `uccl-ht-4096` | `uccl-ht` with a 4096-token step | Fewer prefill steps per long prompt; each HT step pays a large fixed cost |
 | `uccl-ht-4096-dbo` | `uccl-ht-4096` with dual batch overlap | Splits each step into two micro-batches so one's HT all-to-all overlaps the other's compute |
