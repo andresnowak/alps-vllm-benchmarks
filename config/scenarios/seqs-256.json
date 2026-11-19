@@ -1,0 +1,7 @@
+{
+  "id": "seqs-256",
+  "description": "256 sequences per engine (max-num-seqs) instead of the baseline's 16, so a single engine holds the decode suite's 256 requests at once; for baseline-tp4-pp4+seqs-256.",
+  "server": {
+    "max-num-seqs": 256
+  }
+}
