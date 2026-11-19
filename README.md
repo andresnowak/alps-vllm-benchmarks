@@ -26,6 +26,37 @@ its `[env]` table to every `srun` step. Container steps additionally receive the
 `--environment`; uenv steps receive `--uenv` and `--view` instead. Model files use the EDF bind
 mount in containers and their shared host path in uenvs.
 
+### UCCL-EP overlay
+
+GH200 container jobs use a newer UCCL-EP than the image provides. The image keeps vLLM, its
+patches, and Mooncake (used for disaggregated prefill/decode and the KV store). Only the `uccl`
+and `deep_ep` Python packages are replaced.
+
+`config/platforms/cuda.env` pins the upstream commit in `UCCL_OVERLAY_COMMIT`. The overlay is
+built by hand, once per commit and image, from the repository root:
+
+```bash
+./tools/build-uccl-overlay.sh
+```
+
+The build runs on one `normal` GH200 node inside the pinned image and writes a read-only
+directory `uccl-<commit>-<image digest>` (first 12 characters of each) under `UCCL_OVERLAY_ROOT`
+(Ritom scratch by default), with an `overlay.json` that records the commit, image, build flags,
+and any patch from `tools/uccl-overlay/patches/`. The command does nothing when the directory
+already exists. Rebuild by hand after changing `IMAGE_REF` or `UCCL_OVERLAY_COMMIT`: a job whose
+overlay directory does not exist stops at start and points to this command, instead of loading
+an overlay built for another image. After changing the build flags in
+`tools/uccl-overlay/build.sh` or adding a UCCL patch, remove the old directory first; the
+command prints how.
+
+At job start, the launcher mounts the overlay read-only and puts it first on `PYTHONPATH` for the
+vLLM processes. Each node's runtime record stores the overlay's commit, image digest, build flags,
+and patches, and the record is invalid if `uccl.ep` or `deep_ep` load from another location.
+Benchmark experiment fingerprints therefore separate overlay runs from image-only runs.
+
+Set `UCCL_OVERLAY_COMMIT=` (empty) to use the image's UCCL. uenv jobs do not use the overlay,
+because it is built against the container's PyTorch.
+
 ### Runtime patches
 
 Fixes that upstream has merged but the image does not have yet are applied as git patches when
@@ -70,6 +101,7 @@ uenv's packages are read-only; the status file records the skip.
 | `results/` | Versionable benchmark records |
 | `logs/` | Ignored Slurm, server, smoke, and cache logs |
 | `tools/install-bencher.sh` | Pinned repository-local Bencher CLI installer |
+| `tools/build-uccl-overlay.sh` | Builds the pinned UCCL-EP runtime overlay for the CUDA image |
 | `patches/` | Git patches applied to the image's packages at job start (`scripts/runtime-patches.py`) |
 
 ## Prerequisites and model

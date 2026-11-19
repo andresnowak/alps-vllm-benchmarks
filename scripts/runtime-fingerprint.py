@@ -95,6 +95,30 @@ def accelerator_identity() -> dict[str, Any]:
     }
 
 
+# Describe the UCCL overlay and check that Python resolves its packages from the overlay.
+def uccl_overlay() -> dict[str, Any] | None:
+    root = os.getenv("UCCL_OVERLAY")
+    if not root:
+        return None
+    import importlib.util
+
+    overlay = Path(root).resolve()
+    modules = {}
+    for name in ("uccl.ep", "deep_ep"):
+        spec = importlib.util.find_spec(name)
+        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        if origin is None or not origin.is_relative_to(overlay):
+            raise RuntimeError(f"{name} resolves to {origin}, not the UCCL overlay {overlay}")
+        modules[name] = str(origin)
+    manifest = json.loads((overlay / "overlay.json").read_text())
+    inputs = manifest.get("inputs", manifest)  # builds before the simplification nest them
+    return {
+        "path": str(overlay),
+        "modules": modules,
+        "identity": {key: inputs.get(key) for key in ("commit", "image_digest", "build_env", "patches")},
+    }
+
+
 # Capture runtime identity and the exact server command for one node.
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -126,6 +150,7 @@ def main() -> None:
         "machine": platform.machine(),
         "packages": distribution_versions(RUNTIME_PACKAGES),
         "accelerator": accelerator_identity(),
+        "uccl_overlay": uccl_overlay(),
         "runtime_patches": patches,
         "environment": environment,
         "jit_cache": jit_cache,

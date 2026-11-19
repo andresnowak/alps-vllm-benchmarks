@@ -155,6 +155,10 @@ def stable_runtime_identity(records: list[dict[str, Any]]) -> list[dict[str, Any
                 "environment",
             )
         }
+        overlay = record.get("uccl_overlay")
+        if overlay:
+            # The overlay path is per user; its build inputs and content identify it.
+            item["uccl_overlay"] = overlay["identity"]
         patches = record.get("runtime_patches")
         if patches:
             # Which patches each node applied, or found already in the image.

@@ -64,6 +64,11 @@ else
   # A replica that spans nodes still counts as one local DP rank, as in vLLM.
   DP_LOCAL=$(( GPUS_PER_NODE >= TP_SIZE * PP_SIZE ? GPUS_PER_NODE / (TP_SIZE * PP_SIZE) : 1 ))
 fi
+# The launcher verified the UCCL overlay and mounted it read-only; it shadows the image's
+# uccl and deep_ep packages for vLLM and its worker processes.
+if [[ -n "${UCCL_OVERLAY:-}" ]]; then
+  export PYTHONPATH="${UCCL_OVERLAY}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
 # Apply the selected git patches to this container's packages before anything imports them; a
 # patch that neither applies nor is already in the image stops the node here.
 PATCH_STATUS="${LOGDIR}/patches-${role}-node${NODE_RANK}.json"
