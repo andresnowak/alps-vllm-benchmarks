@@ -70,5 +70,40 @@ class ServerMetricsTests(unittest.TestCase):
             self.assertEqual(server_metrics.endpoints("http://h:8000"), {"server": "http://h:8000"})
 
 
+class ServerSummaryTests(unittest.TestCase):
+    @staticmethod
+    def role(queue: float, prefill: float, decode: float | None) -> dict:
+        histogram = lambda mean: {"mean_ms": mean, "p50_ms": None, "p90_ms": None, "p99_ms": mean}
+        row = {"queue": histogram(queue), "prefill": histogram(prefill)}
+        if decode is not None:
+            row["decode"] = histogram(decode)
+        return row
+
+    def test_pd_takes_prompt_times_from_prefill_and_decode_time_from_decode(self) -> None:
+        from benchmark import server_summary
+
+        records = [
+            {"prefill": self.role(10, 100, None), "decode": self.role(0, 1, 2000)},
+            {"prefill": self.role(30, 300, None), "decode": self.role(0, 1, 4000)},
+        ]
+
+        summary = server_summary(records, "prefill", "decode")
+
+        self.assertEqual(summary["server_mean_queue_ms"], 20)
+        self.assertEqual(summary["server_mean_prefill_ms"], 200)
+        self.assertEqual(summary["server_mean_decode_ms"], 3000)
+
+    def test_runs_without_the_decode_histogram_leave_it_blank(self) -> None:
+        from benchmark import server_summary
+
+        summary = server_summary([{"server": self.role(5, 50, None)}, None], "server", "server")
+
+        self.assertEqual(summary["server_mean_queue_ms"], 5)
+        self.assertIsNone(summary["server_mean_decode_ms"])
+
+    def test_the_decode_histogram_is_scraped(self) -> None:
+        self.assertEqual(server_metrics.HISTOGRAMS["decode"], "vllm:request_decode_time_seconds")
+
+
 if __name__ == "__main__":
     unittest.main()

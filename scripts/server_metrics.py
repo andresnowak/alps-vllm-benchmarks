@@ -1,9 +1,10 @@
 """vLLM's Prometheus metrics around one benchmark invocation.
 
 The client sees only the whole TTFT. The server also splits it: how long each request waited
-before it started running (queue time) and how long its prefill took. scripts/benchmark.py
-reads these histograms from every engine's /metrics before and after an invocation and keeps
-the difference, so each point records what its own requests saw.
+before it started running (queue time) and how long its prefill took. It also records how long
+each request spent decoding, which separates decode from queueing and prefill in throughput.
+scripts/benchmark.py reads these histograms from every engine's /metrics before and after an
+invocation and keeps the difference, so each point records what its own requests saw.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ HISTOGRAMS = {
     "queue": "vllm:request_queue_time_seconds",
     "prefill": "vllm:request_prefill_time_seconds",
     "ttft": "vllm:time_to_first_token_seconds",
+    # From the first output token to the last, on the engine that decodes the request.
+    "decode": "vllm:request_decode_time_seconds",
 }
 COUNTERS = {"prefix_cache_queries": "vllm:prefix_cache_queries", "prefix_cache_hits": "vllm:prefix_cache_hits"}
 _LINE = re.compile(r"^([a-zA-Z_:][\w:]*)(\{[^}]*\})? (\S+)$")

@@ -63,6 +63,7 @@ SUMMARY_FIELDS = (
     "server_mean_queue_ms",
     "server_p99_queue_ms",
     "server_mean_prefill_ms",
+    "server_mean_decode_ms",
 )
 BENCHER_MEASURES = {
     "request_throughput": "request-throughput-req-per-sec",
@@ -356,17 +357,27 @@ def load_benchmark_result(
     return result, total_input_tokens
 
 
-# Mean over the repetitions of the server-side queue and prefill times; blank if no repetition
-# had metrics.
-def server_summary(records: list[dict[str, Any] | None]) -> dict[str, float | None]:
+# Mean over the repetitions of the server-side queue, prefill and decode times; blank if no
+# repetition had metrics. Queue and prefill come from the role that schedules the prompts, decode
+# from the role that decodes (the same server in single mode).
+def server_summary(
+    records: list[dict[str, Any] | None], prompt_role: str, decode_role: str
+) -> dict[str, float | None]:
     def mean(histogram: str, field: str) -> float | None:
-        values = [r[histogram][field] for r in records if r and r[histogram][field] is not None]
+        role = decode_role if histogram == "decode" else prompt_role
+        rows = [(record or {}).get(role) or {} for record in records]
+        values = [
+            row[histogram][field]
+            for row in rows
+            if histogram in row and row[histogram][field] is not None
+        ]
         return statistics.fmean(values) if values else None
 
     return {
         "server_mean_queue_ms": mean("queue", "mean_ms"),
         "server_p99_queue_ms": mean("queue", "p99_ms"),
         "server_mean_prefill_ms": mean("prefill", "mean_ms"),
+        "server_mean_decode_ms": mean("decode", "mean_ms"),
     }
 
 
@@ -653,6 +664,7 @@ def main() -> int:
     # the prefill role in PD (the proxy has no metrics).
     metric_urls = server_metrics.endpoints(args.base_url)
     queue_role = "prefill" if "prefill" in metric_urls else "server"
+    decode_role = "decode" if "decode" in metric_urls else "server"
     suite_identity = {
         "path": str(
             suite_path.relative_to(ROOT) if suite_path.is_relative_to(ROOT) else suite_path
@@ -884,7 +896,7 @@ def main() -> int:
                 point_metrics = server_metrics.difference_all(
                     metrics_before, server_metrics.scrape_all(metric_urls)
                 )
-                server_measures[point["name"]].append(point_metrics.get(queue_role))
+                server_measures[point["name"]].append(point_metrics)
                 missing_metrics = BENCHER_MEASURES.keys() - result.keys()
                 if missing_metrics:
                     raise RuntimeError(
@@ -918,7 +930,7 @@ def main() -> int:
                     "repetitions": args.repetitions,
                     "total_prompts": point["prompts"] * args.repetitions,
                     **aggregate,
-                    **server_summary(server_measures[point["name"]]),
+                    **server_summary(server_measures[point["name"]], queue_role, decode_role),
                 }
             )
             bencher[point["name"]] = bencher_measures
