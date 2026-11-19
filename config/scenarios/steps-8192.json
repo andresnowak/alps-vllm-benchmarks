@@ -1,0 +1,7 @@
+{
+  "id": "steps-8192",
+  "description": "A 8192-token step budget (max-num-batched-tokens) instead of the baseline's 2048, so long prompts take fewer prefill steps. Combine with a single-mode scenario, e.g. baseline-tp4-pp4+steps-8192; alone it is the TP2 x DP8 baseline with that step.",
+  "server": {
+    "max-num-batched-tokens": 8192
+  }
+}

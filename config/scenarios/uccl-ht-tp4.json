@@ -1,0 +1,35 @@
+{
+  "id": "uccl-ht-tp4",
+  "description": "UCCL-EP DeepEP high-throughput with TP4 x DP4 (EP16) on four nodes, so one request's attention and all-to-all traffic are split over four GPUs and their four NICs instead of two.",
+  "constraints": {
+    "exact_nodes": 4
+  },
+  "topology": {
+    "tensor_parallel_size": 4
+  },
+  "server": {
+    "all2all-backend": "deepep_high_throughput"
+  },
+  "environment": {
+    "FI_PROVIDER": "cxi",
+    "UCCL_EP_TRANSPORT": "cxi",
+    "FI_CXI_ENABLE_WRITEDATA": "1",
+    "UCCL_EP_CPU_TIMEOUT_SECS": "600",
+    "UCCL_EP_DISPATCH_CONFIG": "20,16,512,16,1024",
+    "UCCL_EP_COMBINE_CONFIG": "20,1,512,16,512",
+    "VLLM_DEEPEP_BUFFER_SIZE_MB": "1024"
+  },
+  "features": {
+    "uccl_ep": "high_throughput"
+  },
+  "platform_overrides": {
+    "cuda": {
+      "server": {
+        "moe-backend": "deep_gemm"
+      },
+      "features": {
+        "moe_backend": "deep_gemm"
+      }
+    }
+  }
+}
