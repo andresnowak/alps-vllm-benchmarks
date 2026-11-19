@@ -103,6 +103,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `uccl-ht-4096-dbo` | `uccl-ht-4096` with dual batch overlap | Splits each step into two micro-batches so one's HT all-to-all overlaps the other's compute |
 | `uccl-ht-8192` | `uccl-ht` with an 8192-token step | An 8K prompt is one prefill step instead of four |
 | `uccl-ht-8192-dbo` | `uccl-ht-8192` with dual batch overlap | As `uccl-ht-4096-dbo`, with twice the tokens per micro-batch |
+| `uccl-ht-tp4-pp2` | `uccl-ht` with TP4 x PP2 x DP2 (EP8) and an 8192-token step | Each replica spans two nodes, one pipeline stage per node, so a long prompt's chunks overlap across stages as in TP4 x PP4, while the MoE all-to-all spans both replicas (EP8, HT); compare with `uccl-ht-8192` |
 | `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable with baseline or low-latency all-to-all |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
 | `eplb` | Expert load balancing | 32 redundant experts with the Gloo communicator |

@@ -330,6 +330,9 @@ def build_vllm_instance_configs(
             raise ValueError(
                 "set pipeline_parallel_size per role in disaggregated mode, not in the topology"
             )
+    # One engine over the whole allocation (DP1, e.g. TP4 x PP4); smaller pipeline replicas
+    # (e.g. TP4 x PP2 x DP2) take the per-replica path below, as the PD roles do.
+    if pp_size > 1 and tp_size * pp_size == nodes * gpus_per_node:
         return {
             "single": pipeline_instance_configs(
                 resolved["server"],
@@ -346,6 +349,7 @@ def build_vllm_instance_configs(
         roles = {
             "single": {
                 "nodes": nodes,
+                "pp": pp_size,
                 "api_port": api_port,
                 "rpc_port": dp_rpc_port,
                 "server": resolved["server"],

@@ -39,7 +39,8 @@ TP_SIZE="${TP_SIZE:-2}"
 NODE_RANK=$(( ${SLURM_PROCID:?SLURM_PROCID is required} - ${ROLE_TASK_OFFSET:-0} ))
 # Instances span TP x PP GPUs; a pipeline-parallel instance spans several nodes.
 PP_SIZE="${PP_SIZE:-1}"
-DP_LOCAL=$((GPUS_PER_NODE / (TP_SIZE * PP_SIZE)))
+# A replica that spans nodes counts as one local DP rank, as in vLLM.
+DP_LOCAL=$(( GPUS_PER_NODE >= TP_SIZE * PP_SIZE ? GPUS_PER_NODE / (TP_SIZE * PP_SIZE) : 1 ))
 
 role="${DEPLOYMENT_ROLE:-single}"
 if [[ "${SERVING_MODE}" == "single" ]]; then

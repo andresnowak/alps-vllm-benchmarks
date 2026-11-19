@@ -354,6 +354,43 @@ class VllmInstanceConfigTests(unittest.TestCase):
         self.assertNotIn("nnodes", configs["prefill"][1])
         self.assertEqual(configs["prefill"][1]["data-parallel-start-rank"], 2)
 
+    def test_single_mode_pipeline_replicas_span_nodes(self) -> None:
+        resolved = resolve_scenario("uccl-ht-tp4-pp2", "cuda")
+        configs = build_vllm_instance_configs(
+            resolved,
+            nodes=4,
+            gpus_per_node=4,
+            head_ip="10.0.0.1",
+            api_port=8000,
+            dp_rpc_port=13345,
+            node_ips=[f"10.0.0.{i}" for i in range(1, 5)],
+        )
+
+        # TP4 x PP2 x DP2 (EP8) on 4 nodes: two replicas of two nodes in one mp world.
+        for node_rank, config in configs["single"].items():
+            self.assertEqual(config["tensor-parallel-size"], 4)
+            self.assertEqual(config["pipeline-parallel-size"], 2)
+            self.assertEqual(config["data-parallel-size"], 2)
+            self.assertEqual(config["nnodes"], 4)
+            self.assertEqual(config["node-rank"], node_rank)
+            self.assertEqual(config["all2all-backend"], "deepep_high_throughput")
+            self.assertEqual(config.get("headless", False), node_rank != 0)
+        self.assertEqual(configs["single"][0]["port"], 8000)
+
+    def test_single_mode_pipeline_over_the_whole_allocation_is_one_engine(self) -> None:
+        resolved = resolve_scenario("baseline-tp4-pp4", "cuda")
+        configs = build_vllm_instance_configs(
+            resolved,
+            nodes=4,
+            gpus_per_node=4,
+            head_ip="10.0.0.1",
+            api_port=8000,
+            dp_rpc_port=13345,
+        )
+
+        self.assertTrue(all("data-parallel-size" not in c for c in configs["single"].values()))
+        self.assertEqual(configs["single"][3]["pipeline-parallel-size"], 4)
+
 
     def test_materialization_writes_complete_config_for_every_node(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

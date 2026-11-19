@@ -1,0 +1,37 @@
+{
+  "id": "uccl-ht-tp4-pp2",
+  "description": "UCCL-EP high-throughput all-to-all with TP4 x PP2 x DP2 (EP8) on four nodes and an 8192-token step budget: each replica spans two nodes, one pipeline stage per node, so a prompt's chunks overlap across stages, and an 8K prompt is one prefill step.",
+  "constraints": {
+    "exact_nodes": 4
+  },
+  "topology": {
+    "tensor_parallel_size": 4,
+    "pipeline_parallel_size": 2
+  },
+  "server": {
+    "all2all-backend": "deepep_high_throughput",
+    "max-num-batched-tokens": 8192
+  },
+  "environment": {
+    "FI_PROVIDER": "cxi",
+    "UCCL_EP_TRANSPORT": "cxi",
+    "FI_CXI_ENABLE_WRITEDATA": "1",
+    "UCCL_EP_CPU_TIMEOUT_SECS": "600",
+    "UCCL_EP_DISPATCH_CONFIG": "20,16,512,16,1024",
+    "UCCL_EP_COMBINE_CONFIG": "20,1,512,16,512",
+    "VLLM_DEEPEP_BUFFER_SIZE_MB": "1024"
+  },
+  "features": {
+    "uccl_ep": "high_throughput"
+  },
+  "platform_overrides": {
+    "cuda": {
+      "server": {
+        "moe-backend": "deep_gemm"
+      },
+      "features": {
+        "moe_backend": "deep_gemm"
+      }
+    }
+  }
+}
