@@ -1,0 +1,43 @@
+{
+  "id": "uccl-ll-tp4",
+  "description": "UCCL-EP low-latency all-to-all with TP4 x DP4 (EP16) on four nodes and 64 sequences per engine, so four engines hold the decode suite's 256 requests.",
+  "constraints": {
+    "exact_nodes": 4
+  },
+  "topology": {
+    "tensor_parallel_size": 4
+  },
+  "server": {
+    "all2all-backend": "deepep_low_latency",
+    "gpu-memory-utilization": 0.9,
+    "max-num-batched-tokens": 1024,
+    "max-num-seqs": 64
+  },
+  "environment": {
+    "FI_PROVIDER": "cxi",
+    "UCCL_EP_TRANSPORT": "cxi",
+    "FI_CXI_ENABLE_WRITEDATA": "1",
+    "UCCL_EP_CPU_TIMEOUT_SECS": "600",
+    "VLLM_DEEPEP_BUFFER_SIZE_MB": "1024"
+  },
+  "platform_overrides": {
+    "rocm": {
+      "server": {
+        "kv-cache-dtype": "auto",
+        "gpu-memory-utilization": 0.7,
+        "enforce-eager": true
+      }
+    },
+    "cuda": {
+      "server": {
+        "moe-backend": "deep_gemm"
+      },
+      "features": {
+        "moe_backend": "deep_gemm"
+      }
+    }
+  },
+  "features": {
+    "uccl_ep": "low_latency"
+  }
+}
