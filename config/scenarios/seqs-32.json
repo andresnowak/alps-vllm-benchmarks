@@ -1,0 +1,7 @@
+{
+  "id": "seqs-32",
+  "description": "32 sequences per engine (max-num-seqs) instead of the baseline's 16, so eight TP2 engines hold the decode suite's 256 requests at once. Combine with a single-mode scenario, e.g. uccl-ll+seqs-32; alone it is the TP2 x DP8 baseline.",
+  "server": {
+    "max-num-seqs": 32
+  }
+}
