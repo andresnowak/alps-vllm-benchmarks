@@ -26,6 +26,36 @@ its `[env]` table to every `srun` step. Container steps additionally receive the
 `--environment`; uenv steps receive `--uenv` and `--view` instead. Model files use the EDF bind
 mount in containers and their shared host path in uenvs.
 
+### Runtime patches
+
+Fixes that upstream has merged but the image does not have yet are applied as git patches when
+a job starts, without rebuilding the image. `RUNTIME_PATCHES` in `config/platforms/cuda.env` lists
+the patch files under `patches/`, separated by spaces and applied in order:
+
+| Patch | What it fixes | In upstream from |
+|---|---|---|
+| `vllm/0001-pr60735-deepep-ht-dbo-record-stream.patch` | DBO with DeepEP high-throughput: an illegal memory access in `ep_scatter` (seen as a hang of all ranks with 2048-token steps) | vLLM 0.33 ([#60735](https://github.com/vllm-project/vllm/pull/60735)) |
+
+The directory of a patch names the package it targets, and the patch uses that project's own
+repository paths, so `git format-patch` output from upstream works unchanged. To add one:
+
+```bash
+gh api repos/vllm-project/vllm/commits/<sha> -H "Accept: application/vnd.github.patch" \
+  > patches/vllm/0002-<short-name>.patch
+```
+
+On every node, `scripts/serve-worker.sh` runs `scripts/runtime-patches.py` inside the container
+before vLLM starts. The container layer is writable and belongs to the job alone, so the image
+never changes. Each patch is applied when it applies cleanly and skipped when the image already
+contains it, for example after an image update to a release with the fix. Otherwise the node
+stops with git's reason before vLLM starts. Files of the patch outside the package, such as
+tests, are ignored. `logs/run-<job>/patches-<role>-node<N>.json` lists each patch with its hash,
+its result (`applied` or `already-present`), and the hashes of the patched files. The runtime
+record and the benchmark provenance carry the same list, so results show which code they ran.
+
+Set `RUNTIME_PATCHES=` (empty) to run the image unpatched. uenv jobs skip the patches, because a
+uenv's packages are read-only; the status file records the skip.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -40,6 +70,7 @@ mount in containers and their shared host path in uenvs.
 | `results/` | Versionable benchmark records |
 | `logs/` | Ignored Slurm, server, smoke, and cache logs |
 | `tools/install-bencher.sh` | Pinned repository-local Bencher CLI installer |
+| `patches/` | Git patches applied to the image's packages at job start (`scripts/runtime-patches.py`) |
 
 ## Prerequisites and model
 

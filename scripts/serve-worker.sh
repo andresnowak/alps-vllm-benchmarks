@@ -64,6 +64,11 @@ else
   # A replica that spans nodes still counts as one local DP rank, as in vLLM.
   DP_LOCAL=$(( GPUS_PER_NODE >= TP_SIZE * PP_SIZE ? GPUS_PER_NODE / (TP_SIZE * PP_SIZE) : 1 ))
 fi
+# Apply the selected git patches to this container's packages before anything imports them; a
+# patch that neither applies nor is already in the image stops the node here.
+PATCH_STATUS="${LOGDIR}/patches-${role}-node${NODE_RANK}.json"
+python3 "${ROOT}/scripts/runtime-patches.py" --status "${PATCH_STATUS}"
+export RUNTIME_PATCHES_STATUS_FILE="${PATCH_STATUS}"
 CONFIG="${SCENARIO_VLLM_CONFIG_DIR}/vllm-${role}-node${NODE_RANK}.yaml"
 [[ -f "${CONFIG}" ]] || { echo "vLLM config is missing: ${CONFIG}" >&2; exit 2; }
 CACHE_STATUS="${LOGDIR}/jit-cache-${role}-node${NODE_RANK}.json"

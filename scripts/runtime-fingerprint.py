@@ -111,6 +111,10 @@ def main() -> None:
     status_file = os.getenv("JIT_CACHE_STATUS_FILE")
     if status_file:
         jit_cache = json.loads(Path(status_file).read_text())
+    patches = None
+    patch_status = os.getenv("RUNTIME_PATCHES_STATUS_FILE")
+    if patch_status and Path(patch_status).is_file():
+        patches = json.loads(Path(patch_status).read_text())
     identity = {
         "schema_version": 1,
         "hostname": socket.gethostname(),
@@ -122,6 +126,7 @@ def main() -> None:
         "machine": platform.machine(),
         "packages": distribution_versions(RUNTIME_PACKAGES),
         "accelerator": accelerator_identity(),
+        "runtime_patches": patches,
         "environment": environment,
         "jit_cache": jit_cache,
     }

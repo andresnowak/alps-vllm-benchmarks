@@ -155,6 +155,16 @@ def stable_runtime_identity(records: list[dict[str, Any]]) -> list[dict[str, Any
                 "environment",
             )
         }
+        patches = record.get("runtime_patches")
+        if patches:
+            # Which patches each node applied, or found already in the image.
+            item["runtime_patches"] = {
+                "skipped": patches.get("skipped"),
+                "patches": [
+                    {key: patch.get(key) for key in ("name", "sha256", "status", "file_sha256")}
+                    for patch in patches.get("patches", [])
+                ],
+            }
         cache = record.get("jit_cache")
         if cache:
             item["jit_cache"] = {
