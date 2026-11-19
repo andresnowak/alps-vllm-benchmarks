@@ -99,6 +99,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; CUDA pins `deep_gemm`, while ROCm retains its platform backend selection |
 | `uccl-ht-4096` | `uccl-ht` with a 4096-token step | Fewer prefill steps per long prompt; each HT step pays a large fixed cost |
 | `uccl-ht-4096-dbo` | `uccl-ht-4096` with dual batch overlap | Splits each step into two micro-batches so one's HT all-to-all overlaps the other's compute |
+| `uccl-ht-8192` | `uccl-ht` with an 8192-token step | An 8K prompt is one prefill step instead of four |
 | `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable with baseline or low-latency all-to-all |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
 | `eplb` | Expert load balancing | 32 redundant experts with the Gloo communicator |
