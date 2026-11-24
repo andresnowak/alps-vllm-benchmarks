@@ -18,6 +18,7 @@ from benchmark import (
     aggregate_measurements,
     archive_reproduction_bundle,
     build_benchmark_command,
+    kv_cache_tokens,
     load_suite,
     make_warmup_point,
     publish_jit_cache_after_warmup,
@@ -103,6 +104,23 @@ class BenchmarkStatisticsTests(unittest.TestCase):
                 12.0 + 8.0**0.5,
             )
 
+
+
+class KvCacheTokensTests(unittest.TestCase):
+    def test_engines_with_and_without_a_dp_index_are_both_read(self) -> None:
+        logdir = Path(tempfile.mkdtemp())
+        (logdir / "serve-server-node0.log").write_text(
+            "(EngineCore_DP0 pid=1) INFO GPU KV cache size: 1,234 tokens\n"
+            "(EngineCore_DP1 pid=2) INFO GPU KV cache size: 5,678 tokens\n"
+        )
+        # One engine (DP1, e.g. TP4 x PP4) has no DP index in its log prefix.
+        (logdir / "serve-decode-node0.log").write_text(
+            "(EngineCore pid=3) INFO GPU KV cache size: 91,011 tokens\n"
+        )
+        self.assertEqual(
+            kv_cache_tokens(logdir),
+            {"server": {"0": 1234, "1": 5678}, "decode": {"0": 91011}},
+        )
 
 
 class RealTextPromptTests(unittest.TestCase):

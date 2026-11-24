@@ -159,12 +159,13 @@ def resolve_datasets(points: list[dict[str, Any]], dataset_dir: Path) -> dict[st
 
 # KV cache capacity of every engine, from the vLLM start-up lines of each node's server log.
 def kv_cache_tokens(logdir: Path) -> dict[str, dict[str, int]]:
-    pattern = re.compile(r"\(EngineCore_DP(\d+) [^)]*\).*GPU KV cache size: ([\d,]+) tokens")
+    # A single engine (DP1, e.g. TP4 x PP4) logs as plain "EngineCore", without a DP index.
+    pattern = re.compile(r"\(EngineCore(?:_DP(\d+))? [^)]*\).*GPU KV cache size: ([\d,]+) tokens")
     capacity: dict[str, dict[str, int]] = {}
     for log in sorted(logdir.glob("serve-*-node*.log")):
         role = log.name.removeprefix("serve-").rsplit("-node", 1)[0]
         for match in pattern.finditer(log.read_text(errors="replace")):
-            capacity.setdefault(role, {})[match[1]] = int(match[2].replace(",", ""))
+            capacity.setdefault(role, {})[match[1] or "0"] = int(match[2].replace(",", ""))
     return capacity
 
 
