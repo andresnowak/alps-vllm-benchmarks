@@ -16,6 +16,7 @@ description: Ideas for optimizing LLM inference speed on a GPU cluster - which s
 
 ## General ideas:
 - We understand that TP can help in decode as it removes the memory bottleneck of loading the weights
+- Always try to see if you can use options that help overlap work or communications (like dual batch overlap for EP)
 
 ## Creating scenarios:
 - Random prompts:
