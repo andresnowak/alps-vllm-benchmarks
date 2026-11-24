@@ -18,5 +18,7 @@ __pycache__/
 .cache/
 .bench-tmp/
 models/
+# Real-text prompt files from scripts/make-dataset.py
+datasets
 tools/bin/
 *.swp

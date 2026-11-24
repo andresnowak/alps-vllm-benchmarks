@@ -33,9 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_TEMPERATURE = 0.0
 MIN_PERCENTILE_SAMPLES = 100
 STATUS_INTERVAL_SECONDS = 60
+RANDOM_DATASET = "random"
 SUMMARY_FIELDS = (
     "name",
     "scenario",
+    "dataset",
     "input_len",
     "effective_input_len",
     "output_len",
@@ -102,6 +104,8 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"line {line}: duplicate benchmark name {name!r}")
             names.add(name)
             point: dict[str, Any] = {"name": name, "scenario": row["scenario"].strip()}
+            # The optional dataset column names a real-text prompt set; empty means random.
+            point["dataset"] = (row.get("dataset") or "").strip() or RANDOM_DATASET
             for field in (
                 "input_len",
                 "output_len",
@@ -129,6 +133,28 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
     if not points:
         raise ValueError("suite contains no benchmark points")
     return points
+
+
+# Real-text points read <dataset_dir>/<dataset>-in<input_len>.jsonl from scripts/make-dataset.py.
+def dataset_file(dataset_dir: Path, point: dict[str, Any]) -> Path:
+    return dataset_dir / f"{point['dataset']}-in{point['input_len']}.jsonl"
+
+
+# Record the prompt file of every real-text point; a short file would make vLLM reuse prompts.
+def resolve_datasets(points: list[dict[str, Any]], dataset_dir: Path) -> dict[str, Any]:
+    records = {}
+    for point in points:
+        if point["dataset"] == RANDOM_DATASET:
+            continue
+        path = dataset_file(dataset_dir, point)
+        if not path.is_file():
+            raise ValueError(f"{point['name']}: {path} is missing; build it with make-dataset.py")
+        with path.open() as stream:
+            rows = sum(1 for line in stream if line.strip())
+        if rows < point["prompts"]:
+            raise ValueError(f"{point['name']}: {path} has {rows} of {point['prompts']} prompts")
+        records[point["name"]] = {"file": path.name, "sha256": file_sha256(path)}
+    return records
 
 
 # KV cache capacity of every engine, from the vLLM start-up lines of each node's server log.
@@ -269,6 +295,23 @@ def build_benchmark_command(
     label: str,
     warmups: int,
 ) -> list[str]:
+    if point["dataset"] == RANDOM_DATASET:
+        dataset_args = [
+            "--dataset-name",
+            RANDOM_DATASET,
+            "--input-len",
+            str(point["input_len"]),
+        ]
+    else:
+        # The prompt files hold raw text. The server applies the chat template once, as
+        # it does for random prompts, so the client must not apply it as well.
+        dataset_args = [
+            "--dataset-name",
+            "custom",
+            "--dataset-path",
+            str(dataset_file(args.dataset_dir, point)),
+            "--skip-chat-template",
+        ]
     return [
         "vllm",
         "bench",
@@ -288,10 +331,7 @@ def build_benchmark_command(
         "--ignore-eos",
         "--temperature",
         str(BENCHMARK_TEMPERATURE),
-        "--dataset-name",
-        "random",
-        "--input-len",
-        str(point["input_len"]),
+        *dataset_args,
         "--output-len",
         str(point["output_len"]),
         "--num-prompts",
@@ -567,6 +607,12 @@ def archive_reproduction_bundle(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", type=Path, required=True)
+    parser.add_argument(
+        "--dataset-dir",
+        type=Path,
+        default=ROOT / "datasets",
+        help="directory with the <dataset>-in<input_len>.jsonl prompt files",
+    )
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--served-model-name", default="glm-5.3")
@@ -603,6 +649,8 @@ def main() -> int:
     logdir = args.logdir.resolve()
     batch_script_path = args.batch_script.resolve()
     points = load_suite(suite_path)
+    args.dataset_dir = args.dataset_dir.resolve()
+    datasets = resolve_datasets(points, args.dataset_dir)
     scenario = json.loads(scenario_path.read_text())
     scenario_id = str(scenario["id"])
     timestamp = datetime.now(timezone.utc)
@@ -679,7 +727,7 @@ def main() -> int:
             "point_order": [point["name"] for point in points],
         },
         "seed": 0,
-        "dataset": "random",
+        "datasets": datasets,
         "ignore_eos": True,
         "temperature": BENCHMARK_TEMPERATURE,
         "token_alignment": token_alignment,

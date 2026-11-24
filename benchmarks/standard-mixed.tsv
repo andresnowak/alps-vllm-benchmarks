@@ -1,0 +1,12 @@
+name	scenario	dataset	input_len	output_len	prompts	warmup_prompts	concurrency
+conc-c1-mixed	concurrency	mixed	1024	128	128	16	1
+conc-c4-mixed	concurrency	mixed	1024	128	128	16	4
+conc-c16-mixed	concurrency	mixed	1024	128	128	32	16
+conc-c32-mixed	concurrency	mixed	1024	128	128	64	32
+conc-c64-mixed	concurrency	mixed	1024	128	256	128	64
+prefill-1k-mixed	prefill	mixed	1024	32	128	16	8
+prefill-4k-mixed	prefill	mixed	4096	32	128	16	8
+prefill-16k-mixed	prefill	mixed	16384	32	128	16	8
+decode-128-mixed	decode	mixed	256	128	128	16	8
+decode-512-mixed	decode	mixed	256	512	128	16	8
+decode-1024-mixed	decode	mixed	256	1024	128	16	8

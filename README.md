@@ -338,6 +338,37 @@ Long-context points retain 128 requests and three repetitions so their p99 value
 meaning as the standard suite; the explicit eight-hour allocation accounts for that measurement
 volume.
 
+### Real-text prompts
+
+Random token IDs do not route through the experts like real text. `benchmarks/standard-mixed.tsv`
+repeats the 11 standard shapes with `dataset=mixed`: real prompts taken in turn from English,
+German, French, and Chinese web text (FineWeb-Edu, FineWeb-2), code (InstructCoder), math
+(NuminaMath-CoT), and chat (WildChat-1M). Keep the random suite as the control; a difference
+between the two suites for one scenario is the effect of real routing.
+
+`benchmarks/real-text-sources.tsv` adds `prefill-4k`, `decode-512` and `conc-c16` on each source
+alone (`dataset=web_en`, `web_de`, `web_fr`, `web_zh`, `code`, `math` or `chat`), after the 11
+mixed points, to show how much the source of the text changes a setup's speed.
+
+Build the prompt files once on a login node, which has internet access. Each prompt has exactly
+the point's input length under the chat template:
+
+```bash
+./scripts/make-dataset.py --tokenizer models/GLM-5.3 \
+  --lengths 256 1024 4096 16384 --out-dir datasets
+for source in web_en web_de web_fr web_zh code math chat; do
+  ./scripts/make-dataset.py --tokenizer models/GLM-5.3 --source "$source" \
+    --lengths 256 1024 4096 --out-dir datasets
+done
+./scripts/submit-serve.py --benchmark-suite benchmarks/standard-mixed.tsv
+```
+
+A point reads `datasets/<dataset>-in<input_len>.jsonl` through vLLM's `custom` dataset. The run
+stops before serving traffic if a file is missing or has fewer prompts than the point needs, and
+the manifest records each file's SHA-256. `datasets` can be a symlink to scratch storage that the
+EDF mounts. The files are not in git: they are generated, and they hold text from third-party
+datasets under their own licences.
+
 Every point uses deterministic greedy sampling (`temperature=0`) with random prompt generation seeded
 to zero. Each measured repetition contains at least 128 requests (256 at concurrency 64), so every
 reported p99 is derived from at least 128 request observations.

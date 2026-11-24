@@ -17,9 +17,11 @@ from benchmark import (
     MIN_PERCENTILE_SAMPLES,
     aggregate_measurements,
     archive_reproduction_bundle,
+    build_benchmark_command,
     load_suite,
     make_warmup_point,
     publish_jit_cache_after_warmup,
+    resolve_datasets,
     run_with_heartbeat,
 )
 from provenance import artifact_inventory
@@ -101,6 +103,59 @@ class BenchmarkStatisticsTests(unittest.TestCase):
                 12.0 + 8.0**0.5,
             )
 
+
+
+class RealTextPromptTests(unittest.TestCase):
+    def suite(self, directory: Path, dataset: str) -> list[dict]:
+        path = directory / "suite.tsv"
+        path.write_text(
+            "name\tscenario\tdataset\tinput_len\toutput_len\tprompts\twarmup_prompts\tconcurrency\n"
+            f"p\tprefill\t{dataset}\t1024\t32\t100\t16\t8\n"
+        )
+        return load_suite(path)
+
+    def prompts(self, directory: Path, name: str, rows: int) -> Path:
+        path = directory / name
+        path.write_text("".join(json.dumps({"prompt": f"text {i}"}) + "\n" for i in range(rows)))
+        return path
+
+    def test_an_empty_dataset_column_means_random_prompts(self) -> None:
+        directory = Path(tempfile.mkdtemp())
+        [point] = self.suite(directory, "")
+        self.assertEqual(point["dataset"], "random")
+        self.assertEqual(resolve_datasets([point], directory), {})
+        args = mock.Mock(base_url="http://x", served_model_name="m", model="m", dataset_dir=directory)
+        command = build_benchmark_command(args, point, directory / "r.json", label="p", warmups=1)
+        self.assertEqual(command[command.index("--dataset-name") + 1], "random")
+        self.assertIn("--input-len", command)
+
+    def test_a_named_dataset_reads_its_prompt_file_without_a_second_template(self) -> None:
+        directory = Path(tempfile.mkdtemp())
+        [point] = self.suite(directory, "web_en")
+        path = self.prompts(directory, "web_en-in1024.jsonl", 100)
+        self.assertEqual(resolve_datasets([point], directory), {"p": {"file": path.name, "sha256": file_sha256(path)}})
+        args = mock.Mock(base_url="http://x", served_model_name="m", model="m", dataset_dir=directory)
+        command = build_benchmark_command(args, point, directory / "r.json", label="p", warmups=1)
+        self.assertEqual(command[command.index("--dataset-name") + 1], "custom")
+        self.assertEqual(command[command.index("--dataset-path") + 1], str(path))
+        self.assertIn("--skip-chat-template", command)
+        self.assertNotIn("--input-len", command)
+
+    def test_a_missing_or_short_prompt_file_stops_the_run(self) -> None:
+        directory = Path(tempfile.mkdtemp())
+        [point] = self.suite(directory, "code")
+        with self.assertRaisesRegex(ValueError, "missing; build it with make-dataset.py"):
+            resolve_datasets([point], directory)
+        self.prompts(directory, "code-in1024.jsonl", 99)
+        with self.assertRaisesRegex(ValueError, "has 99 of 100 prompts"):
+            resolve_datasets([point], directory)
+
+    def test_the_real_text_suites_name_only_files_make_dataset_writes(self) -> None:
+        sources = {"mixed", "web_en", "web_de", "web_fr", "web_zh", "code", "math", "chat"}
+        for suite in ("standard-mixed.tsv", "real-text-sources.tsv"):
+            points = load_suite(ROOT / "benchmarks" / suite)
+            self.assertTrue(points)
+            self.assertLessEqual({p["dataset"] for p in points}, sources, suite)
 
 
 class ReproductionBundleTests(unittest.TestCase):
