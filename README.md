@@ -175,11 +175,12 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `speculative-mtp` | MTP speculative decoding | Three speculative tokens |
 | `prefix-caching` | Local GPU prefix cache | No external KV connector |
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
-| `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; not composable |
+| `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; composable only with layers that set nothing but `server`, `environment`, and `features` (for example `+prefix-caching`), which apply to both roles |
 | `disaggregated-pd-prefill-no-async` | `disaggregated-pd` with async scheduling off on prefill | With async scheduling, the prefill engine marks KV ready to send one (eager HT) step late; decode keeps async scheduling |
 | `disaggregated-pd-prefill-dbo` | `disaggregated-pd` with dual batch overlap on prefill | Splits prefill steps above 512 tokens into two micro-batches, so one's HT all-to-all overlaps the other's compute; decode (at most 16 tokens per step) unchanged |
 | `disaggregated-pd-prefill-4096` | `disaggregated-pd` with a 4096-token prefill step and 32 decode sequences | Doubles the prefill `max-num-batched-tokens` from 2048, and decode `max-num-seqs` (and its equal batch budget) from 16 to 32 per engine |
 | `disaggregated-pd-decode-tp4-pp2` | `disaggregated-pd` with decode TP4 x PP2 x DP2 (EP8) | Each decode replica spans two nodes, one pipeline stage per node; the role uses `--nnodes`/`--node-rank` with the mp backend; prefill unchanged |
+| `disaggregated-pd-tp4-pp4` | Mooncake prefill/decode split, each role one TP4 x PP4 instance | Four prefill plus four decode nodes, one pipeline stage per node and EP4 inside the node, as `baseline-tp4-pp4`; vLLM's default all-to-all; decode keeps 16 sequences |
 | `production` | External production vLLM parity | Exactly four CUDA nodes, TP=4/DCP=4, 1M context, FP8 KV cache, 32 sequences, 4096-token scheduler cap, and one MTP token |
 | `million-context` | Experimental vLLM 0.30 capacity reproducer | Exactly four CUDA nodes, TP=4, FP8 KV cache, native CPU KV offload; currently fails startup without DCP |
 

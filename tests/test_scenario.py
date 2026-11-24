@@ -276,6 +276,27 @@ class ScenarioAllocationTests(unittest.TestCase):
         self.assertEqual(decode_server["gpu-memory-utilization"], 0.9)
         self.assertEqual(decode_server["moe-backend"], "deep_gemm")
 
+    def test_server_only_layers_compose_with_disaggregated_roles(self) -> None:
+        resolved = resolve_scenario("disaggregated-pd+prefix-caching", "cuda")
+        configs = build_vllm_instance_configs(
+            resolved, nodes=8, gpus_per_node=4, head_ip="10.0.0.1", api_port=8000, dp_rpc_port=13345,
+        )
+
+        self.assertEqual(resolved["components"], ["disaggregated-pd", "prefix-caching"])
+        self.assertEqual(select_nodes(resolved), 8)
+        for role in ("prefill", "decode"):
+            self.assertIs(configs[role][0]["enable-prefix-caching"], True)
+        # The role's own settings still win over the layer's.
+        self.assertEqual(configs["decode"][0]["max-num-batched-tokens"], 16)
+
+    def test_layers_that_change_the_layout_do_not_compose_with_disaggregated(self) -> None:
+        with self.assertRaisesRegex(ValueError, "baseline-tp4-pp4 cannot be composed with disaggregated-pd: it sets"):
+            resolve_scenario("disaggregated-pd+baseline-tp4-pp4", "cuda")
+        with self.assertRaisesRegex(ValueError, "disaggregated scenario must come first"):
+            resolve_scenario("prefix-caching+disaggregated-pd", "cuda")
+        with self.assertRaisesRegex(ValueError, "only one may be composed"):
+            resolve_scenario("disaggregated-pd+disaggregated-pd-decode-tp4", "cuda")
+
     def test_platform_constraint_is_checked_before_submission(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not support platform rocm"):
             resolve_scenario("production", "rocm")

@@ -1,0 +1,57 @@
+{
+  "id": "disaggregated-pd-tp4-pp4",
+  "description": "Four-node prefill and four-node decode deployments joined by Mooncake direct KV transfer, each role one TP4 x PP4 instance (one pipeline stage per node, EP4 inside the node, as baseline-tp4-pp4).",
+  "mode": "disaggregated",
+  "constraints": {
+    "platforms": ["cuda"]
+  },
+  "features": {
+    "external_kv_transfer": true,
+    "disaggregated_prefill_decode": "mooncake"
+  },
+  "environment": {
+    "FI_PROVIDER": "cxi",
+    "VLLM_MOONCAKE_CONNECTOR_TIMEOUT": "120"
+  },
+  "deployments": {
+    "prefill": {
+      "nodes": 4,
+      "tensor_parallel_size": 4,
+      "pipeline_parallel_size": 4,
+      "api_port": 8100,
+      "rpc_port": 13345,
+      "bootstrap_port": 8998,
+      "server": {
+        "kv-transfer-config": {
+          "kv_connector": "MooncakeConnector",
+          "kv_role": "kv_producer",
+          "kv_connector_extra_config": {
+            "mooncake_protocol": "cxi"
+          }
+        }
+      }
+    },
+    "decode": {
+      "nodes": 4,
+      "tensor_parallel_size": 4,
+      "pipeline_parallel_size": 4,
+      "api_port": 8200,
+      "rpc_port": 13346,
+      "server": {
+        "gpu-memory-utilization": 0.9,
+        "max-num-seqs": 16,
+        "max-num-batched-tokens": 16,
+        "kv-transfer-config": {
+          "kv_connector": "MooncakeConnector",
+          "kv_role": "kv_consumer",
+          "kv_connector_extra_config": {
+            "mooncake_protocol": "cxi"
+          }
+        }
+      }
+    },
+    "proxy": {
+      "port": 8000
+    }
+  }
+}

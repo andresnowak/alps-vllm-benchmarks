@@ -131,6 +131,25 @@ def parse_components(value: str) -> list[str]:
     return components
 
 
+# Keys a layer may set to be composed with a disaggregated scenario. They reach both roles through
+# the top-level server and environment (a role's own server settings still win). Layers that set
+# topology, deployments, node constraints, or the mode would clash with the per-role layout.
+DISAGGREGATED_LAYER_KEYS = {"id", "description", "server", "environment", "features"}
+
+
+def check_disaggregated_layers(components: list[str], layer_keys: dict[str, set[str]]) -> None:
+    pd = [component for component in components if "deployments" in layer_keys[component]]
+    if len(pd) != 1 or components[0] != pd[0]:
+        raise ValueError("a disaggregated scenario must come first, and only one may be composed")
+    for component in components[1:]:
+        extra = sorted(layer_keys[component] - DISAGGREGATED_LAYER_KEYS)
+        if extra:
+            raise ValueError(
+                f"{component} cannot be composed with {pd[0]}: it sets {', '.join(extra)}; "
+                "only server, environment, and features layers can apply to both roles"
+            )
+
+
 # Merge platform defaults first, then scenario layers in composition order.
 def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
     components = parse_components(scenario)
@@ -155,6 +174,7 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
     resolved = deep_merge(baseline, load_json(platform_path))
     source_paths = [baseline_path, platform_path]
     effective_components: list[str] = []
+    layer_keys: dict[str, set[str]] = {}
     if components == ["baseline"]:
         effective_components.append("baseline")
     else:
@@ -168,6 +188,9 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
                     f"unknown scenario {component!r}; available: {available}"
                 )
             layer = load_json(path)
+            layer_keys[component] = set(layer) - {"platform_overrides"}
+            for override in layer.get("platform_overrides", {}).values():
+                layer_keys[component] |= set(override)
             platform_overrides = layer.pop("platform_overrides", {})
             resolved = deep_merge(resolved, layer)
             if platform in platform_overrides:
@@ -188,8 +211,8 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
     mode = resolved.get("mode", "single")
     if mode not in {"single", "disaggregated"}:
         raise ValueError(f"unsupported serving mode: {mode}")
-    if mode == "disaggregated" and len(effective_components) != 1:
-        raise ValueError("disaggregated-pd cannot be composed with another scenario")
+    if mode == "disaggregated":
+        check_disaggregated_layers(effective_components, layer_keys)
     size_low_latency_steps(resolved["server"])
     for deployment in resolved.get("deployments", {}).values():
         if isinstance(deployment, dict) and "server" in deployment:
