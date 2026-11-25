@@ -7,6 +7,8 @@ set -euo pipefail
 : "${ROOT:?}" "${OVERLAY:?}" "${UCCL_OVERLAY_COMMIT:?}" "${IMAGE_REF:?}" "${IMAGE_DIGEST:?}"
 UCCL_REPO="https://github.com/uccl-project/uccl.git"
 UCCL_MAX_JOBS="${UCCL_MAX_JOBS:-16}"
+# Build-only Python package of UCCL main since its nanobind bindings; the version eth-cscs/alps-extended-images#67 pins.
+UCCL_NANOBIND_VERSION="${UCCL_NANOBIND_VERSION:-3.0.1}"
 WORK="/tmp/uccl-overlay-build-${SLURM_JOB_ID:-local}"
 STAGING="${OVERLAY}.staging-${SLURM_JOB_ID:-$$}"
 
@@ -77,6 +79,9 @@ done
 export CPATH="${DEPS}/root/usr/include:${DEPS}/root/usr/include/libnl3${CPATH:+:${CPATH}}"
 export LIBRARY_PATH="${DEPS}/root/usr/lib/${MULTIARCH}${LIBRARY_PATH:+:${LIBRARY_PATH}}"
 
+step "staging build-only nanobind==${UCCL_NANOBIND_VERSION}"
+python3 -m pip install -q --no-deps --no-cache-dir --target "${WORK}/pydeps" "nanobind==${UCCL_NANOBIND_VERSION}"
+export PYTHONPATH="${WORK}/pydeps${PYTHONPATH:+:${PYTHONPATH}}"
 step "building uccl.ep with MAX_JOBS=${UCCL_MAX_JOBS}"
 # The CUDA/GH200 flags of alps-extended-images apps/vllm/Containerfile. Changing them, or adding
 # a patch, needs a rebuild by hand (remove the old overlay, then run tools/build-uccl-overlay.sh).
@@ -110,7 +115,7 @@ print(f"import check passed: uccl.ep={uccl.ep.__file__} deep_ep={deep_ep.__file_
 PY
 
 # What the runtime record and provenance report about this overlay.
-BUILD_ENV_TEXT="${BUILD_ENV[*]}" HEADERS="$(printf '%s\n' "${HEADER_PACKAGES[@]}")" \
+BUILD_ENV_TEXT="${BUILD_ENV[*]}" UCCL_NANOBIND_VERSION="${UCCL_NANOBIND_VERSION}" HEADERS="$(printf '%s\n' "${HEADER_PACKAGES[@]}")" \
 PATCHES="$(cd "${ROOT}/tools/uccl-overlay/patches" 2>/dev/null && sha256sum ./*.patch 2>/dev/null || true)" \
 python3 - "${STAGING}/overlay.json" <<'PY'
 import json, os, socket, sys
@@ -128,6 +133,7 @@ json.dump({
     "patches": [line.split()[1].removeprefix("./") for line in os.environ["PATCHES"].splitlines()],
     "patch_sha256": [line.split()[0] for line in os.environ["PATCHES"].splitlines()],
     "header_packages": os.environ["HEADERS"].splitlines(),
+    "build_python_packages": [f"nanobind=={os.environ['UCCL_NANOBIND_VERSION']}"],
     "built": {"at": datetime.now(timezone.utc).isoformat(), "host": socket.gethostname(),
               "slurm_job_id": os.getenv("SLURM_JOB_ID"), "torch": torch.__version__,
               "cuda": torch.version.cuda},

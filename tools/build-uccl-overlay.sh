@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build the UCCL-EP overlay pinned by config/platforms/cuda.env against that profile's image.
+# Build the UCCL-EP overlay pinned by config/platforms/cuda.env against that profile's image, or,
+# with MODEL_PROFILE=<name>, the overlay and image of config/models/<name>.env (sourced after the
+# platform profile, as sbatch/serve.sbatch does).
 # Run from the repository root on a login node; the build runs on one GH200 node. Rebuild by
 # hand after changing IMAGE_REF or UCCL_OVERLAY_COMMIT: the directory name carries both, so a job
 # whose overlay does not exist stops at start and points here. An existing build is reused.
@@ -12,6 +14,10 @@ cd "${ROOT}"
 PY=(uv run --no-project --python 3.12 -- python)
 # shellcheck source=/dev/null
 source config/platforms/cuda.env
+if [[ -n "${MODEL_PROFILE:-}" ]]; then
+  # shellcheck source=/dev/null
+  source "config/models/${MODEL_PROFILE}.env"
+fi
 : "${UCCL_OVERLAY_COMMIT:?cuda.env does not pin UCCL_OVERLAY_COMMIT}"
 : "${UCCL_OVERLAY_ROOT:?cuda.env does not set UCCL_OVERLAY_ROOT}"
 
