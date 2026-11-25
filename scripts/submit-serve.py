@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Sequence
 
 from scenario import resolve_scenario, select_nodes
+from script_utils import DEFAULT_MODEL_PROFILE
 
 ROOT = Path(__file__).resolve().parents[1]
 SBATCH_SCRIPT = Path("sbatch/serve.sbatch")
@@ -38,6 +39,7 @@ def build_environment(args: argparse.Namespace, nodes: int) -> dict[str, str]:
     environment.update(
         {
             "SCENARIO": args.scenario,
+            "MODEL_PROFILE": args.model_profile,
             "PLATFORM": args.platform,
             "EXPECTED_NODES": str(nodes),
             "RUNTIME_BACKEND": "uenv" if args.uenv else "container",
@@ -63,9 +65,15 @@ def build_environment(args: argparse.Namespace, nodes: int) -> dict[str, str]:
 # Parse serving and common Slurm submission options.
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Submit a GLM-5.3 serving job with scenario-aware resources."
+        description="Submit a serving job with scenario-aware resources."
     )
     parser.add_argument("--scenario", default=os.environ.get("SCENARIO", "baseline"))
+    parser.add_argument(
+        "--model-profile",
+        default=os.environ.get("MODEL_PROFILE", DEFAULT_MODEL_PROFILE),
+        help="config/models/<profile>.env and .json: checkpoint, image and server settings "
+        f"(default: {DEFAULT_MODEL_PROFILE})",
+    )
     parser.add_argument(
         "--platform",
         default=os.environ.get("PLATFORM", "cuda"),
@@ -107,14 +115,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        resolved = resolve_scenario(args.scenario, args.platform)
+        resolved = resolve_scenario(args.scenario, args.platform, args.model_profile)
         nodes = select_nodes(resolved, args.nodes)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     command = build_command(args, nodes)
     environment = build_environment(args, nodes)
-    print(f"scenario={resolved['id']} platform={args.platform} nodes={nodes}")
+    print(
+        f"model={args.model_profile} scenario={resolved['id']} "
+        f"platform={args.platform} nodes={nodes}"
+    )
     try:
         return subprocess.run(command, cwd=ROOT, env=environment).returncode
     except OSError as error:

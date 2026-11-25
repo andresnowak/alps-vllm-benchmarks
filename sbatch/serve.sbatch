@@ -55,6 +55,18 @@ PROFILE="${ROOT}/config/platforms/${PLATFORM}.env"
 # shellcheck source=/dev/null
 source "${PROFILE}"
 
+# The model profile comes after the platform profile, so it can pin its own image.
+MODEL_PROFILE="${MODEL_PROFILE:-glm-5.3}"
+MODEL_PROFILE_ENV="${ROOT}/config/models/${MODEL_PROFILE}.env"
+[[ -f "${MODEL_PROFILE_ENV}" ]] || { echo "unknown MODEL_PROFILE=${MODEL_PROFILE}" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "${MODEL_PROFILE_ENV}"
+[[ "${MODEL_API}" == chat || "${MODEL_API}" == completions ]] || {
+  echo "model profile ${MODEL_PROFILE} sets MODEL_API=${MODEL_API}; expected chat or completions" >&2
+  exit 2
+}
+[[ "${MODEL_DIR}" = /* ]] || MODEL_DIR="${ROOT}/${MODEL_DIR}"
+
 RUNTIME_BACKEND="${RUNTIME_BACKEND:-container}"
 # Slurm's --uenv-passthrough=ignore strips reserved UENV_* variables from the submission
 # environment, so the wrapper transports the selection under STACK_UENV_* names.
@@ -62,7 +74,7 @@ UENV_REF="${STACK_UENV_REF:-}"
 UENV_VIEW="${STACK_UENV_VIEW:-}"
 UENV_DIGEST=""
 
-MODEL_SOURCE="${MODEL:-${ROOT}/models/GLM-5.3}"
+MODEL_SOURCE="${MODEL:-${MODEL_DIR}}"
 [[ -d "${MODEL_SOURCE}" ]] || { echo "model directory is missing: ${MODEL_SOURCE}" >&2; exit 2; }
 MODEL_SOURCE="$(realpath "${MODEL_SOURCE}")"
 case "${MODEL_SOURCE}" in
@@ -75,7 +87,7 @@ EDF="${EDF:-${ROOT}/${EDF_REL}}"
 case "${RUNTIME_BACKEND}" in
   container)
     IMAGE_DIGEST="$("${PY[@]}" "${ROOT}/scripts/resolve-image-digest.py" "${IMAGE_REF}")"
-    MODEL_CONTAINER="${MODEL_CONTAINER:-/models/GLM-5.3}"
+    MODEL_CONTAINER="${MODEL_CONTAINER:?model profile ${MODEL_PROFILE} did not set MODEL_CONTAINER}"
     [[ "${MODEL_CONTAINER}" = /* && "${MODEL_CONTAINER}" != "/" ]] || {
       echo "MODEL_CONTAINER must be an absolute non-root path: ${MODEL_CONTAINER}" >&2
       exit 2
@@ -183,6 +195,7 @@ DP_RPC_PORT="${DP_RPC_PORT:-13345}"
 
 "${PY[@]}" "${ROOT}/scripts/scenario.py" \
   --scenario "${SCENARIO}" \
+  --model-profile "${MODEL_PROFILE}" \
   --platform "${PLATFORM}" \
   --nodes "${SLURM_JOB_NUM_NODES}" \
   --gpus-per-node "${GPUS_PER_NODE}" \
@@ -209,7 +222,8 @@ export RUNTIME_BACKEND UENV_REF UENV_VIEW UENV_DIGEST EDF_ENV_NAMES UCCL_OVERLAY
 export SCENARIO_ENV="${SCENARIO_DIR}/scenario.env"
 export SCENARIO_RESOLVED="${SCENARIO_DIR}/scenario.json"
 export SCENARIO_VLLM_CONFIG_DIR SCENARIO_ENV_NAMES
-export MODEL_REPO="${MODEL_REPO:-zai-org/GLM-5.3}"
+export MODEL_REPO="${MODEL_REPO:?model profile ${MODEL_PROFILE} did not set MODEL_REPO}"
+export MODEL_PROFILE MODEL_API
 export MODEL_REVISION="${MODEL_REVISION:-}"
 export GPUS_PER_NODE
 export HF_HUB_OFFLINE=1
@@ -225,7 +239,7 @@ if [[ "${RUNTIME_BACKEND}" == "container" ]]; then
 else
   echo "nodes=${NODES[*]} head=${HEAD_NODE} (${HEAD_IP}) model=${MODEL_SOURCE} view=${UENV_VIEW}"
 fi
-echo "scenario=${SCENARIO_ID} mode=${SERVING_MODE} TP=${TP_SIZE} all2all=${ALL2ALL}"
+echo "model=${MODEL_PROFILE} api=${MODEL_API} scenario=${SCENARIO_ID} mode=${SERVING_MODE} TP=${TP_SIZE} all2all=${ALL2ALL}"
 echo "uccl=${UCCL_OVERLAY:-image}"
 
 WORKER_ARGS=(
@@ -341,6 +355,7 @@ status "server ready; url=${BASE_URL}"
 SMOKE_ARGS=(
   --base-url "${BASE_URL}"
   --model "${SERVED_MODEL_NAME:?scenario did not define served-model-name}"
+  --api "${MODEL_API}"
   --output "${LOGDIR}/completion.json"
 )
 if [[ -n "${SMOKE_INPUT_TOKENS:-}" ]]; then
@@ -376,6 +391,8 @@ if [[ -n "${BENCHMARK_SUITE:-}" ]]; then
       --base-url "${BASE_URL}" \
       --model "${MODEL}" \
       --served-model-name "${SERVED_MODEL_NAME:?scenario did not define served-model-name}" \
+      --model-profile "${MODEL_PROFILE}" \
+      --api "${MODEL_API}" \
       --output-root "${RESULTS_ROOT}" \
       --platform "${PLATFORM}" \
       --image-ref "${IMAGE_REF}" \

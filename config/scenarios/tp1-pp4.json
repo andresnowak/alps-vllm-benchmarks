@@ -1,0 +1,14 @@
+{
+  "id": "tp1-pp4",
+  "description": "One TP1 x PP4 engine on 1 node: one pipeline stage per GPU, so no tensor-parallel all-reduce and no expert all-to-all; the pipeline hand-offs stay on NVLink. Compose with min-nodes-1.",
+  "constraints": {
+    "exact_nodes": 1
+  },
+  "topology": {
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 4
+  },
+  "features": {
+    "pipeline_parallel": 4
+  }
+}

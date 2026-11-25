@@ -15,6 +15,7 @@ from scenario import (
     resolve_scenario,
     select_nodes,
     validate_server,
+    vllm_config_file,
 )
 
 
@@ -458,3 +459,62 @@ class VllmInstanceConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelProfileTests(unittest.TestCase):
+    @staticmethod
+    def single_config(model: str, scenario: str = "baseline") -> tuple[dict, dict]:
+        resolved = resolve_scenario(scenario, "cuda", model)
+        configs = build_vllm_instance_configs(
+            resolved, nodes=select_nodes(resolved), gpus_per_node=4, head_ip="10.0.0.1",
+            api_port=8000, dp_rpc_port=13345,
+        )
+        return resolved, vllm_config_file(configs["single"][0])
+
+    def test_default_profile_leaves_the_glm_scenario_unchanged(self) -> None:
+        resolved = resolve_scenario("baseline", "cuda", "glm-5.3")
+
+        self.assertEqual(resolved, resolve_scenario("baseline", "cuda"))
+        self.assertNotIn("model_profile", resolved)
+        self.assertEqual(resolved["server"]["reasoning-parser"], "glm47")
+
+    def test_chonk_runs_tp1_on_its_own_image_settings(self) -> None:
+        resolved, config = self.single_config("chonk")
+
+        self.assertEqual(resolved["model_profile"], "chonk")
+        self.assertEqual(select_nodes(resolved), 4)
+        self.assertEqual((config["tensor-parallel-size"], config["data-parallel-size"]), (1, 16))
+        self.assertEqual(config["served-model-name"], "chonk")
+        self.assertEqual(config["dtype"], "bfloat16")
+        self.assertIs(config["trust-remote-code"], True)
+        # A base model has no parsers: the null in the profile leaves the option out.
+        for option in ("reasoning-parser", "tool-call-parser", "enable-auto-tool-choice"):
+            self.assertNotIn(option, config)
+            self.assertNotIn(f"no-{option}", config)
+
+    def test_chonk_refuses_tensor_parallelism(self) -> None:
+        with self.assertRaisesRegex(ValueError, "model chonk supports TP 1 only"):
+            resolve_scenario("baseline-tp4-pp4", "cuda", "chonk")
+
+    def test_megachonk_needs_eight_nodes_and_raises_its_positions(self) -> None:
+        resolved, config = self.single_config("megachonk")
+
+        self.assertEqual(select_nodes(resolved), 8)
+        self.assertEqual((config["tensor-parallel-size"], config["data-parallel-size"]), (2, 16))
+        positions = {"max_position_embeddings": config["max-model-len"]}
+        self.assertEqual(config["hf-overrides"], positions)
+
+    def test_unknown_profile_is_named(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown model profile 'nope'; available: .*chonk"):
+            resolve_scenario("baseline", "cuda", "nope")
+
+
+    def test_fp8_mlp_quantizes_the_mlps_of_a_bf16_model_online(self) -> None:
+        _, config = self.single_config("chonk", "fp8-mlp")
+
+        self.assertEqual(config["quantization"], "online")
+        fp8 = {"weight": "fp8_per_block_static"}
+        self.assertEqual(config["quantization-config"]["moe"], fp8)
+        self.assertEqual(config["quantization-config"]["linear"], fp8)
+        self.assertEqual(config["moe-backend"], "triton")
+        self.assertEqual(config["tensor-parallel-size"], 1)

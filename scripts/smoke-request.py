@@ -4,7 +4,7 @@ import json
 import urllib.request
 from pathlib import Path
 
-from script_utils import atomic_json
+from script_utils import MODEL_APIS, atomic_json
 
 
 
@@ -50,7 +50,14 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--input-tokens", type=int)
     parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument(
+        "--api",
+        choices=MODEL_APIS,
+        default="chat",
+        help="completions: a raw /v1/completions request, for a model without a chat template",
+    )
     args = parser.parse_args()
+    completions = args.api == "completions"
 
     content = "In one sentence, explain expert parallelism."
     effective_input_tokens = None
@@ -59,7 +66,9 @@ def main() -> None:
 
         def chat_token_count(candidate: str) -> int:
             tokenize_payload = json.dumps(
-                {
+                {"model": args.model, "prompt": candidate}
+                if completions
+                else {
                     "model": args.model,
                     "messages": [{"role": "user", "content": candidate}],
                     "add_generation_prompt": True,
@@ -92,17 +101,27 @@ def main() -> None:
                 f"target={args.input_tokens}, observed={effective_input_tokens}"
             )
 
-    payload = json.dumps(
-        {
+    if completions:
+        # A base model continues text; it does not answer a question.
+        if args.input_tokens is None:
+            content = "Expert parallelism splits the experts of a mixture-of-experts model"
+        body = {
+            "model": args.model,
+            "prompt": content,
+            "max_tokens": args.max_tokens,
+            "temperature": 0,
+        }
+    else:
+        body = {
             "model": args.model,
             "messages": [{"role": "user", "content": content}],
             "max_tokens": args.max_tokens,
             "temperature": 0,
             "reasoning_effort": "low",
         }
-    ).encode()
+    payload = json.dumps(body).encode()
     request = urllib.request.Request(
-        f"{args.base_url.rstrip('/')}/v1/chat/completions",
+        f"{args.base_url.rstrip('/')}/v1/{'completions' if completions else 'chat/completions'}",
         data=payload,
         headers={"Content-Type": "application/json"},
     )
@@ -111,7 +130,7 @@ def main() -> None:
         result = json.load(response)
 
     choices = result.get("choices")
-    if not choices or not choices[0].get("message"):
+    if not choices or not (choices[0].get("text") if completions else choices[0].get("message")):
         raise RuntimeError(f"Unexpected completion response: {result}")
 
     if effective_input_tokens is not None:
@@ -121,7 +140,7 @@ def main() -> None:
             "max_output_tokens": args.max_tokens,
         }
     atomic_json(args.output, result)
-    print(choices[0]["message"].get("content", ""))
+    print(choices[0]["text"] if completions else choices[0]["message"].get("content", ""))
 
 
 if __name__ == "__main__":

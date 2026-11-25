@@ -26,7 +26,13 @@ from provenance import (
     repository_identity,
     stable_runtime_identity,
 )
-from script_utils import atomic_json, canonical_sha256, file_sha256
+from script_utils import (
+    DEFAULT_MODEL_PROFILE,
+    MODEL_APIS,
+    atomic_json,
+    canonical_sha256,
+    file_sha256,
+)
 import server_metrics
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -236,8 +242,9 @@ def run_with_heartbeat(
     )
 
 
-# Verify both raw-token and chat-template tokenization through the serving endpoint.
-def verify_token_alignment(base_url: str, model: str) -> dict[str, Any]:
+# Verify both raw-token and chat-template tokenization through the serving endpoint. A model
+# served over raw completions (a base model without a chat template) checks raw tokens only.
+def verify_token_alignment(base_url: str, model: str, api: str = "chat") -> dict[str, Any]:
     endpoint = f"{base_url.rstrip('/')}/tokenize"
     probe = "benchmark token alignment probe"
 
@@ -265,6 +272,14 @@ def verify_token_alignment(base_url: str, model: str) -> dict[str, Any]:
         return len(tokens)
 
     raw_tokens = token_count({"prompt": probe, "add_special_tokens": False})
+    if api == "completions":
+        return {
+            "endpoint": endpoint,
+            "model": model,
+            "api": api,
+            "raw_probe_tokens": raw_tokens,
+            "chat_template_token_overhead": 0,
+        }
     post_template_tokens = token_count(
         {
             "messages": [{"role": "user", "content": probe}],
@@ -313,14 +328,15 @@ def build_benchmark_command(
             str(dataset_file(args.dataset_dir, point)),
             "--skip-chat-template",
         ]
+    completions = args.api == "completions"
     return [
         "vllm",
         "bench",
         "serve",
         "--backend",
-        "openai-chat",
+        "openai" if completions else "openai-chat",
         "--endpoint",
-        "/v1/chat/completions",
+        "/v1/completions" if completions else "/v1/chat/completions",
         "--base-url",
         args.base_url,
         "--model",
@@ -617,6 +633,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--served-model-name", default="glm-5.3")
+    parser.add_argument("--model-profile", default=DEFAULT_MODEL_PROFILE)
+    parser.add_argument(
+        "--api",
+        choices=MODEL_APIS,
+        default="chat",
+        help="chat: /v1/chat/completions with the chat template; completions: raw /v1/completions",
+    )
     parser.add_argument("--output-root", type=Path, default=ROOT / "results")
     parser.add_argument("--run-id")
     parser.add_argument("--platform", required=True, choices=("cuda", "rocm"))
@@ -651,11 +674,26 @@ def main() -> int:
     batch_script_path = args.batch_script.resolve()
     points = load_suite(suite_path)
     args.dataset_dir = args.dataset_dir.resolve()
+    if args.api == "completions":
+        # Real-text prompts are cut to length under a chat template: a model without one runs
+        # random-token points only.
+        chat_only = [p["name"] for p in points if p.get("dataset", RANDOM_DATASET) != RANDOM_DATASET]
+        if chat_only:
+            raise SystemExit(
+                f"model profile {args.model_profile} has no chat template (api=completions); "
+                f"these points need one: {', '.join(chat_only)}"
+            )
     datasets = resolve_datasets(points, args.dataset_dir)
     scenario = json.loads(scenario_path.read_text())
     scenario_id = str(scenario["id"])
     timestamp = datetime.now(timezone.utc)
     run_scenario = slug(scenario_id)
+    # The model in run names. GLM-5.3 keeps its earlier names; other models also prefix their
+    # result folders, so they are told apart from GLM-5.3 runs of the same scenario.
+    default_model = args.model_profile == DEFAULT_MODEL_PROFILE
+    model_tag = "glm53" if default_model else slug(args.model_profile)
+    if not default_model:
+        run_scenario = f"{model_tag}-{run_scenario}"
     default_run_id = (
         f"{timestamp:%Y%m%dT%H%M%SZ}-{os.getenv('SLURM_JOB_ID', 'local')}-"
         f"{args.platform}-{run_scenario}"
@@ -708,7 +746,7 @@ def main() -> int:
         "mode": cache_mode,
         "phase": "after-full-suite-warmup",
     }
-    token_alignment = verify_token_alignment(args.base_url, args.served_model_name)
+    token_alignment = verify_token_alignment(args.base_url, args.served_model_name, args.api)
     # Queue and prefill times come from the engines that schedule the prompts: the server, or
     # the prefill role in PD (the proxy has no metrics).
     metric_urls = server_metrics.endpoints(args.base_url)
@@ -758,7 +796,7 @@ def main() -> int:
     }
     experiment_fingerprint = canonical_sha256(experiment_identity)
     spec = slug(
-        f"glm53-{args.platform}-{nodes}n-{gpus_per_node}g-tp{tp_size}-"
+        f"{model_tag}-{args.platform}-{nodes}n-{gpus_per_node}g-tp{tp_size}-"
         + (f"pp{pp_size}-" if pp_size > 1 else "")
         + f"dp{dp_size}-ep{dp_size * tp_size}-{scenario_id}"
     )

@@ -1,0 +1,14 @@
+{
+  "id": "tp1-pp32",
+  "description": "One TP1 x PP32 engine over 8 nodes: one pipeline stage per GPU, so no tensor-parallel all-reduce and no expert all-to-all; only the pipeline hand-offs move data between GPUs, 7 of them across the network.",
+  "constraints": {
+    "exact_nodes": 8
+  },
+  "topology": {
+    "tensor_parallel_size": 1,
+    "pipeline_parallel_size": 32
+  },
+  "features": {
+    "pipeline_parallel": 32
+  }
+}

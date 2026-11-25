@@ -1,0 +1,18 @@
+{
+  "id": "chonk",
+  "description": "Apertus2 Chonk: 42 layers, 256 routed experts (8 per token), 7 KV heads, so TP1 only. Base model: no chat template, reasoning or tool parser.",
+  "constraints": {
+    "tensor_parallel_sizes": [1]
+  },
+  "topology": {
+    "tensor_parallel_size": 1
+  },
+  "server": {
+    "served-model-name": "chonk",
+    "trust-remote-code": true,
+    "dtype": "bfloat16",
+    "enable-auto-tool-choice": null,
+    "tool-call-parser": null,
+    "reasoning-parser": null
+  }
+}

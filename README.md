@@ -145,6 +145,34 @@ node:
 The EDF mounts the resolved host directory read-only at `/models/GLM-5.3`. `MODEL_CONTAINER` may
 override that absolute container path when an image requires a different location.
 
+### Model profiles
+
+`--model-profile` selects the model. Each profile is `config/models/<profile>.env`: the
+checkpoint, the container path, the image and the API. A profile can also have a
+`<profile>.json` server layer. That layer comes after the platform defaults and before the
+scenario layers. A `null` value in it leaves the option out, and `tensor_parallel_sizes` limits TP.
+
+| Profile | Model | Image | API |
+| --- | --- | --- | --- |
+| `glm-5.3` (default) | GLM-5.3; its settings are in `baseline.json` | `config/platforms/cuda.env` | chat |
+| `chonk` | Apertus2 Chonk: TP1 only (7 KV heads), 4 nodes | `vllm-apertus2-v031-cuda` (vLLM 0.31, [alps-extended-images#67](https://github.com/eth-cscs/alps-extended-images/pull/67)) | completions |
+| `megachonk` | Apertus2 Megachonk: 8 nodes at least | as `chonk` | completions |
+| `chonk-fp8`, `megachonk-fp8` | The same models from block-FP8 checkpoints ([swiss-ai/hfconverter#8](https://github.com/swiss-ai/hfconverter/pull/8)): routed and shared experts and dense MLPs in FP8, 128x128 blocks | as `chonk` | completions |
+
+```bash
+./scripts/submit-serve.py --model-profile chonk --benchmark-suite benchmarks/standard.tsv
+```
+
+The Apertus2 checkpoints are base models without a chat template. Their profiles use raw
+`/v1/completions`, so only random-token suites run: the harness refuses real-text points for
+them, because those prompts are cut to length under a chat template. They do not use the UCCL
+overlay, which is built for the `vllm-cuda` image. They apply the runtime patch
+`vllm/0002-numa-bind-workers-to-cpu-nodes.patch`: vLLM's `numa-bind` binds each worker's memory to
+its own CPU node, and online FP8 holds a worker's BF16 weights while it quantizes them (about
+105 GiB per worker for Megachonk TP4 x PP4 on ~120 GiB nodes), so a bound worker was killed. The
+patch binds each worker to every CPU node; a preferred policy would spill into the GPUs' HBM nodes
+on GH200 instead.
+
 ## Scenarios
 
 `scripts/scenario.py` resolves layers in this order: `config/scenarios/baseline.json`, the selected
@@ -174,6 +202,12 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `offload-prefetch` | Async layer-group offload | Two of every eight layers offloaded; one layer prefetched |
 | `speculative-mtp` | MTP speculative decoding | Three speculative tokens |
 | `prefix-caching` | Local GPU prefix cache | No external KV connector |
+| `tp1-pp4`, `tp1-pp8`, `tp1-pp16`, `tp1-pp32` | One TP1 engine split into 4, 8, 16 or 32 pipeline stages | One stage per GPU over 1, 2, 4 or 8 nodes: no TP all-reduce and no expert all-to-all, only the pipeline hand-offs |
+| `tp4-pp8` | One TP4 x PP8 engine over 8 nodes | One stage per node; TP4 and EP4 inside each node, so the MoE all-to-all stays on NVLink |
+| `min-nodes-1` | Node minimum of 1 | Lowers the baseline's (and a model profile's) 4-node minimum, for layouts that need fewer nodes |
+| `fp8-mlp` | Online block-FP8 MLPs | 128x128 block FP8 for the routed experts, shared experts and dense MLPs of a BF16 checkpoint (`--quantization online`) |
+| `moe-triton` | Triton MoE kernels | For checkpoints where DeepGEMM is not wanted, after a layer that selects it |
+| `loader-conc-1`, `loader-gpu` | RunAI streamer settings for online FP8 | One read stream instead of 4; or distributed mode, which streams to the GPUs and quantizes there |
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
 | `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; composable only with layers that set nothing but `server`, `environment`, and `features` (for example `+prefix-caching`), which apply to both roles |
 | `disaggregated-pd-prefill-no-async` | `disaggregated-pd` with async scheduling off on prefill | With async scheduling, the prefill engine marks KV ready to send one (eager HT) step late; decode keeps async scheduling |

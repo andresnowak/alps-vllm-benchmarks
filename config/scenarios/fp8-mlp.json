@@ -1,0 +1,27 @@
+{
+  "id": "fp8-mlp",
+  "description": "Online 128x128 block FP8 weights for the routed experts, the shared experts and the dense MLPs of a BF16 checkpoint (vLLM --quantization online). Attention and KDA projections, latent projections, embeddings and the output head stay BF16. As FP8=1 FP8_SCOPE=mlp in the eth-cscs/alps-extended-images#67 launchers, with the Triton MoE backend and the same RunAI loader limits: online FP8 stages the BF16 weights in CPU memory, and without a 16 GiB buffer limit the four workers of a node ran out of host memory (job 5445598). Not for checkpoints that are already FP8, such as GLM-5.3.",
+  "server": {
+    "quantization": "online",
+    "quantization-config": {
+      "moe": {
+        "weight": "fp8_per_block_static"
+      },
+      "linear": {
+        "weight": "fp8_per_block_static"
+      },
+      "ignore": [
+        "re:^(?!.*\\.mlp\\.(?:experts(?:\\.|$)|(?:shared_experts\\.)?(?:gate_up_proj|gate_proj|up_proj|down_proj)(?:\\.|$))).*"
+      ]
+    },
+    "moe-backend": "triton",
+    "model-loader-extra-config": {
+      "distributed": false,
+      "concurrency": 4,
+      "memory_limit": 17179869184
+    }
+  },
+  "features": {
+    "online_fp8": "mlp"
+  }
+}

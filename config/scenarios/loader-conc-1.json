@@ -1,0 +1,9 @@
+{
+  "id": "loader-conc-1",
+  "description": "RunAI streamer loader with one read stream (concurrency 1) instead of 4, to lower the host memory each worker holds while it loads; compose after fp8-mlp, whose other loader limits stay.",
+  "server": {
+    "model-loader-extra-config": {
+      "concurrency": 1
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "loader-gpu",
+  "description": "RunAI streamer in distributed mode, so the weights stream to the GPUs and online FP8 quantizes them there, layer by layer. Compose after fp8-mlp, which stages them in CPU memory: on GH200 each worker staged about 100 GiB or more, beyond a node's CPU memory for Megachonk (jobs 5447120, 5447206, 5447237).",
+  "server": {
+    "model-loader-extra-config": {
+      "distributed": true
+    }
+  }
+}

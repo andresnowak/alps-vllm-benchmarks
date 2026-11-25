@@ -11,6 +11,12 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, BinaryIO
 
+# The model served when no --model-profile is given (config/models/glm-5.3.env).
+DEFAULT_MODEL_PROFILE = "glm-5.3"
+# How a model profile is benchmarked: chat uses /v1/chat/completions and the chat template;
+# completions uses raw /v1/completions, for a base model without a chat template.
+MODEL_APIS = ("chat", "completions")
+
 
 # Serialize a value into the stable JSON representation used for fingerprints.
 def canonical_bytes(value: Any) -> bytes:

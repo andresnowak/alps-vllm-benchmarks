@@ -1,0 +1,7 @@
+{
+  "id": "min-nodes-1",
+  "description": "Lower the baseline's 4-node minimum (and a model profile's) to 1, so a layout that needs fewer nodes can run: Chonk as TP1 x DP(4N), EP(4N) on N = 1 or 2 nodes (--nodes N), or Megachonk as baseline-tp4-pp4 on 4 nodes. Nothing else changes.",
+  "constraints": {
+    "min_nodes": 1
+  }
+}

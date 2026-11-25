@@ -1,0 +1,14 @@
+{
+  "id": "tp4-pp8",
+  "description": "One TP4 x PP8 engine over 8 nodes: one pipeline stage per node, TP4 and, with expert parallelism, EP4 inside each node, so the MoE all-to-all stays on NVLink and only the pipeline hand-offs cross the network.",
+  "constraints": {
+    "exact_nodes": 8
+  },
+  "topology": {
+    "tensor_parallel_size": 4,
+    "pipeline_parallel_size": 8
+  },
+  "features": {
+    "pipeline_parallel": 8
+  }
+}

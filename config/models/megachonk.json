@@ -1,0 +1,19 @@
+{
+  "id": "megachonk",
+  "description": "Apertus2 Megachonk: 61 layers, 256 routed experts (8 per token), 16 KV heads, about 1.1 TB in BF16, so 8 nodes at least. Base model: no chat template, reasoning or tool parser. Its config sets 8,192 positions; the #67 launcher raises them to the context length, as here. Its weights take 75.6 GiB per GPU in TP2 x DP16 (EP32): at the platform's 0.88 GPU memory share only 1.87 GiB was left for KV, less than one 32,768-token request (job 5445600), so it uses 0.90. 0.95 (the #67 launcher's value) left too little for CUDA graphs and autotuning in the TP4 x PP4 and TP4 x PP8 layouts, which ran out of GPU memory after the KV cache was set aside (jobs 5446265, 5446266).",
+  "constraints": {
+    "min_nodes": 8
+  },
+  "server": {
+    "served-model-name": "megachonk",
+    "trust-remote-code": true,
+    "dtype": "bfloat16",
+    "hf-overrides": {
+      "max_position_embeddings": 32768
+    },
+    "enable-auto-tool-choice": null,
+    "tool-call-parser": null,
+    "reasoning-parser": null,
+    "gpu-memory-utilization": 0.9
+  }
+}

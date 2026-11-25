@@ -12,11 +12,20 @@ from pathlib import Path
 
 from typing import Any
 
-from script_utils import atomic_json, atomic_text, canonical_sha256, file_sha256
+from script_utils import (
+    DEFAULT_MODEL_PROFILE,
+    atomic_json,
+    atomic_text,
+    canonical_sha256,
+    file_sha256,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = ROOT / "config" / "scenarios"
 PLATFORM_DIR = ROOT / "config" / "platforms"
+MODEL_DIR = ROOT / "config" / "models"
+# Keys a model profile's .json layer may set.
+MODEL_LAYER_KEYS = {"id", "description", "constraints", "topology", "server", "environment"}
 
 
 # Recursively merge scenario mappings without mutating either input.
@@ -92,9 +101,13 @@ STORE_TRUE_FLAGS = frozenset(
 # vLLM default applies (prefix caching and async scheduling stayed on). A `true`
 # is always passed through as `--<flag>`. Store-true flags keep `false`: their
 # default is already off.
+# A `null` (set by a model profile, e.g. to drop GLM's parsers for a base model) leaves the
+# option out, so the vLLM default applies.
 def vllm_config_file(config: dict[str, Any]) -> dict[str, Any]:
     spelled: dict[str, Any] = {}
     for key, item in config.items():
+        if item is None:
+            continue
         if item is False and key not in STORE_TRUE_FLAGS:
             spelled[f"no-{key}"] = True
         else:
@@ -150,8 +163,31 @@ def check_disaggregated_layers(components: list[str], layer_keys: dict[str, set[
             )
 
 
-# Merge platform defaults first, then scenario layers in composition order.
-def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
+# A model profile's server layer, config/models/<model>.json, if the model has one. The default
+# model (GLM-5.3) has none: baseline.json holds its settings.
+def load_model_layer(model: str) -> tuple[dict[str, Any], Path | None]:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", model):
+        raise ValueError(f"invalid model profile: {model!r}")
+    if not (MODEL_DIR / f"{model}.env").is_file():
+        available = ", ".join(sorted(item.stem for item in MODEL_DIR.glob("*.env")))
+        raise ValueError(f"unknown model profile {model!r}; available: {available}")
+    path = MODEL_DIR / f"{model}.json"
+    if not path.is_file():
+        return {}, None
+    layer = load_json(path)
+    extra = sorted(set(layer) - MODEL_LAYER_KEYS)
+    if extra:
+        raise ValueError(
+            f"model profile {model} sets {', '.join(extra)}; "
+            "it may set only server, environment, topology and constraints"
+        )
+    return layer, path
+
+
+# Merge platform defaults first, then the model profile, then scenario layers in composition order.
+def resolve_scenario(
+    scenario: str, platform: str, model: str = DEFAULT_MODEL_PROFILE
+) -> dict[str, Any]:
     components = parse_components(scenario)
     if "baseline" in components and len(components) > 1:
         raise ValueError("baseline is implicit and must not be combined explicitly")
@@ -173,6 +209,13 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
         )
     resolved = deep_merge(baseline, load_json(platform_path))
     source_paths = [baseline_path, platform_path]
+    model_layer, model_path = load_model_layer(model)
+    if model_path is not None:
+        settings = {
+            key: value for key, value in model_layer.items() if key not in {"id", "description"}
+        }
+        resolved = deep_merge(resolved, settings)
+        source_paths.append(model_path)
     effective_components: list[str] = []
     layer_keys: dict[str, set[str]] = {}
     if components == ["baseline"]:
@@ -200,6 +243,9 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
     scenario_id = "+".join(effective_components)
     resolved["id"] = scenario_id
     resolved["components"] = effective_components
+    # Only other models record their profile, so earlier GLM-5.3 identities stay unchanged.
+    if model != DEFAULT_MODEL_PROFILE:
+        resolved["model_profile"] = model
     resolved["source_files"] = [
         {"path": str(path.relative_to(ROOT)), "sha256": file_sha256(path)}
         for path in source_paths
@@ -208,6 +254,21 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
     constraints = resolved.get("constraints", {})
     if platform not in constraints.get("platforms", []):
         raise ValueError(f"scenario {scenario_id} does not support platform {platform}")
+    # A model can limit TP, e.g. Apertus2 Chonk: 7 KV heads, so TP1 only.
+    allowed_tp = (model_layer.get("constraints") or {}).get("tensor_parallel_sizes")
+    if allowed_tp is not None:
+        base_tp = int(resolved["topology"]["tensor_parallel_size"])
+        sizes = [base_tp] + [
+            int(deployment.get("tensor_parallel_size", base_tp))
+            for deployment in resolved.get("deployments", {}).values()
+            if isinstance(deployment, dict) and "nodes" in deployment
+        ]
+        bad = sorted({size for size in sizes if size not in allowed_tp})
+        if bad:
+            raise ValueError(
+                f"scenario {scenario_id} uses TP {', '.join(map(str, bad))}; model {model} "
+                f"supports TP {', '.join(map(str, allowed_tp))} only"
+            )
     mode = resolved.get("mode", "single")
     if mode not in {"single", "disaggregated"}:
         raise ValueError(f"unsupported serving mode: {mode}")
@@ -629,7 +690,7 @@ def materialize_scenario(
 
 # Resolve CLI inputs and materialize the selected runtime scenario.
 def resolve(args: argparse.Namespace) -> None:
-    resolved = resolve_scenario(args.scenario, args.platform)
+    resolved = resolve_scenario(args.scenario, args.platform, args.model_profile)
     resolved_path = materialize_scenario(
         resolved,
         platform=args.platform,
@@ -650,6 +711,7 @@ def resolve(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", default="baseline")
+    parser.add_argument("--model-profile", default=DEFAULT_MODEL_PROFILE)
     parser.add_argument("--platform", required=True, choices=("cuda", "rocm"))
     parser.add_argument("--nodes", required=True, type=int)
     parser.add_argument("--gpus-per-node", required=True, type=int)

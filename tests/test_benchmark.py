@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -24,6 +25,7 @@ from benchmark import (
     publish_jit_cache_after_warmup,
     resolve_datasets,
     run_with_heartbeat,
+    verify_token_alignment,
 )
 from provenance import artifact_inventory
 from script_utils import canonical_sha256, file_sha256
@@ -438,3 +440,39 @@ class JitCachePublicationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompletionsApiTests(unittest.TestCase):
+    def test_completions_models_use_the_raw_completions_endpoint(self) -> None:
+        point = {
+            "name": "p", "dataset": "random", "input_len": 1024, "output_len": 128,
+            "prompts": 128, "concurrency": 8,
+        }
+        def command(api: str) -> list[str]:
+            args = mock.Mock(base_url="http://x", served_model_name="m", model="m", api=api)
+            return build_benchmark_command(args, point, Path("r.json"), label="p", warmups=0)
+
+        chat, raw = command("chat"), command("completions")
+
+        self.assertEqual(chat[chat.index("--endpoint") + 1], "/v1/chat/completions")
+        self.assertEqual(chat[chat.index("--backend") + 1], "openai-chat")
+        self.assertEqual(raw[raw.index("--endpoint") + 1], "/v1/completions")
+        self.assertEqual(raw[raw.index("--backend") + 1], "openai")
+
+    def test_completions_alignment_sends_no_chat_request(self) -> None:
+        sent = []
+
+        def urlopen(request, timeout):
+            sent.append(json.loads(request.data))
+            return io.BytesIO(json.dumps({"tokens": [1, 2, 3, 4]}).encode())
+
+        with mock.patch("benchmark.urlopen", urlopen):
+            result = verify_token_alignment("http://x", "chonk", "completions")
+
+        # One raw-token request, and no chat-template request.
+        self.assertEqual(
+            [sorted(payload) for payload in sent], [["add_special_tokens", "model", "prompt"]]
+        )
+        self.assertEqual(result["chat_template_token_overhead"], 0)
+        self.assertEqual(result["api"], "completions")
+

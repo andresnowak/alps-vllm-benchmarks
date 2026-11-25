@@ -1,0 +1,10 @@
+{
+  "id": "moe-triton",
+  "description": "Triton MoE kernels, for BF16 checkpoints, after a layer that selects DeepGEMM.",
+  "server": {
+    "moe-backend": "triton"
+  },
+  "features": {
+    "moe_backend": "triton"
+  }
+}

@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andres Nowak <noreply@example.invalid>
+Date: Tue, 24 Nov 2026 17:52:41 +0100
+Subject: [PATCH] Bind vLLM workers' memory to all CPU NUMA nodes
+
+numa-bind starts each worker with numactl --membind=<its node>, so a worker that
+needs more host memory than its CPU node has is killed although the other CPU
+nodes are free. Online FP8 keeps a worker's BF16 weights while it quantizes them,
+about 105 GiB per worker for Megachonk TP4 x PP4 on ~120 GiB nodes.
+
+A preferred policy does not help on GH200: the kernel then falls back to the
+nearest node with room, which is the GPU's own HBM node, and the GPU runs out of
+memory. Binding to every CPU node of numa_bind_nodes keeps local allocation first
+and falls back only to the other CPU nodes.
+---
+ vllm/utils/numa_utils.py | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/utils/numa_utils.py b/vllm/utils/numa_utils.py
+index 2e52935..16baac5 100644
+--- a/vllm/utils/numa_utils.py
++++ b/vllm/utils/numa_utils.py
+@@ -349,6 +349,11 @@ def _get_numactl_worker_args(
+     gpu_index = _get_gpu_index(parallel_config, local_rank, dp_local_rank)
+     numa_node = _get_numa_node(parallel_config, gpu_index)
+     cpu_binding = _get_cpu_binding(parallel_config, gpu_index, [numa_node])
++    # alps-vllm-benchmarks: bind memory to all the CPU nodes of numa_bind_nodes, not only this
++    # GPU's. The kernel still allocates from the local node first, but a worker that outgrows it
++    # (online FP8 holds the BF16 weights while it quantizes them) uses the other CPU nodes, not
++    # the GPUs' HBM nodes that GH200 also exposes, and is not killed.
++    mem_nodes = ",".join(str(n) for n in sorted(set(parallel_config.numa_bind_nodes)))
+ 
+     if cpu_binding is not None:
+         logger.info(
+@@ -358,7 +363,7 @@ def _get_numactl_worker_args(
+             cpu_binding,
+             numa_node,
+         )
+-        return f"--physcpubind={cpu_binding} --membind={numa_node}"
++        return f"--physcpubind={cpu_binding} --membind={mem_nodes}"
+ 
+     logger.info(
+         "Binding worker subprocess (local_rank=%s, gpu_index=%s) to NUMA node %s",
+@@ -366,7 +371,7 @@ def _get_numactl_worker_args(
+         gpu_index,
+         numa_node,
+     )
+-    return f"--cpunodebind={numa_node} --membind={numa_node}"
++    return f"--cpunodebind={numa_node} --membind={mem_nodes}"
+ 
+ 
+ def _get_enginecore_numa_nodes(
+-- 
+2.43.0
+

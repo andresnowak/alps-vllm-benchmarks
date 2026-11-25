@@ -17,7 +17,7 @@ __pycache__/
 # Local caches and temporary benchmark state
 .cache/
 .bench-tmp/
-models/
+/models/
 # Real-text prompt files from scripts/make-dataset.py
 datasets
 tools/bin/
