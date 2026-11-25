@@ -80,7 +80,8 @@ class ScenarioAllocationTests(unittest.TestCase):
                 try:
                     resolved = resolve_scenario(scenario_name, platform)
                 except ValueError as error:
-                    if "does not support platform" in str(error):
+                    # Platform-specific layers, and PD-only layers that resolve only after a PD scenario.
+                    if "does not support platform" in str(error) or "sets role_server for" in str(error):
                         continue
                     raise
                 server = resolved["server"]
@@ -289,6 +290,22 @@ class ScenarioAllocationTests(unittest.TestCase):
             self.assertIs(configs[role][0]["enable-prefix-caching"], True)
         # The role's own settings still win over the layer's.
         self.assertEqual(configs["decode"][0]["max-num-batched-tokens"], 16)
+
+    def test_role_server_layer_sets_one_role_only(self) -> None:
+        resolved = resolve_scenario("disaggregated-pd-tp4-pp4+speculative-mtp+decode-mtp-tokens", "cuda")
+        configs = build_vllm_instance_configs(
+            resolved, nodes=8, gpus_per_node=4, head_ip="10.0.0.1", api_port=8000, dp_rpc_port=13345,
+        )
+
+        for role in ("prefill", "decode"):
+            self.assertEqual(configs[role][0]["speculative-config"]["num_speculative_tokens"], 3)
+        self.assertEqual(configs["decode"][0]["max-num-batched-tokens"], 64)
+        self.assertEqual(configs["decode"][0]["max-num-seqs"], 16)
+        self.assertNotEqual(configs["prefill"][0].get("max-num-batched-tokens"), 64)
+
+    def test_role_server_layer_needs_a_disaggregated_role(self) -> None:
+        with self.assertRaisesRegex(ValueError, "role_server for 'decode'"):
+            resolve_scenario("speculative-mtp+decode-mtp-tokens", "cuda")
 
     def test_layers_that_change_the_layout_do_not_compose_with_disaggregated(self) -> None:
         with self.assertRaisesRegex(ValueError, "baseline-tp4-pp4 cannot be composed with disaggregated-pd: it sets"):

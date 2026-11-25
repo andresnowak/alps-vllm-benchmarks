@@ -1,0 +1,11 @@
+{
+  "id": "mtp-draft-safetensors",
+  "description": "With +speculative-mtp and PP > 1: load the MTP draft with the standard safetensors loader. Only the last pipeline stage loads the draft, and the Run:ai streamer starts a collective over all ranks, so with it the last stage waits for the other stages until the 10-minute store timeout. vLLM 0.31 makes this switch itself only for fastsafetensors (get_pp_safe_draft_load_config). The target model still uses the platform loader.",
+  "server": {
+    "speculative-config": {
+      "draft_load_config": {
+        "load_format": "safetensors"
+      }
+    }
+  }
+}

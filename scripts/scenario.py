@@ -145,9 +145,10 @@ def parse_components(value: str) -> list[str]:
 
 
 # Keys a layer may set to be composed with a disaggregated scenario. They reach both roles through
-# the top-level server and environment (a role's own server settings still win). Layers that set
+# the top-level server and environment (a role's own server settings still win), except
+# `role_server`, which sets server options of one role: {"decode": {...}}. Layers that set
 # topology, deployments, node constraints, or the mode would clash with the per-role layout.
-DISAGGREGATED_LAYER_KEYS = {"id", "description", "server", "environment", "features"}
+DISAGGREGATED_LAYER_KEYS = {"id", "description", "server", "environment", "features", "role_server"}
 
 
 def check_disaggregated_layers(components: list[str], layer_keys: dict[str, set[str]]) -> None:
@@ -159,7 +160,7 @@ def check_disaggregated_layers(components: list[str], layer_keys: dict[str, set[
         if extra:
             raise ValueError(
                 f"{component} cannot be composed with {pd[0]}: it sets {', '.join(extra)}; "
-                "only server, environment, and features layers can apply to both roles"
+                "only server, environment, features and role_server layers can compose with it"
             )
 
 
@@ -235,7 +236,15 @@ def resolve_scenario(
             for override in layer.get("platform_overrides", {}).values():
                 layer_keys[component] |= set(override)
             platform_overrides = layer.pop("platform_overrides", {})
+            role_server = layer.pop("role_server", {})
             resolved = deep_merge(resolved, layer)
+            deployments = resolved.get("deployments", {})
+            for role, server in role_server.items():
+                if role not in deployments:
+                    raise ValueError(
+                        f"{component} sets role_server for {role!r}, which this scenario does not have"
+                    )
+                deployments[role]["server"] = deep_merge(deployments[role].get("server", {}), server)
             if platform in platform_overrides:
                 resolved = deep_merge(resolved, platform_overrides[platform])
             source_paths.append(path)

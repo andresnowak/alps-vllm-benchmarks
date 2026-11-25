@@ -201,6 +201,8 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `offload-uva` | UVA weight offload | 16 GiB per GPU |
 | `offload-prefetch` | Async layer-group offload | Two of every eight layers offloaded; one layer prefetched |
 | `speculative-mtp` | MTP speculative decoding | Three speculative tokens |
+| `decode-mtp-tokens` | PD decode budget for MTP | With `+speculative-mtp`: decode `max-num-batched-tokens` 64 instead of 16, so each of its 16 requests can verify 3 draft tokens per step |
+| `mtp-draft-safetensors` | MTP draft from the safetensors loader | With `+speculative-mtp` and PP > 1: only the last stage loads the draft, and the Run:ai streamer starts a collective over all ranks, so that stage waited until the store timeout |
 | `prefix-caching` | Local GPU prefix cache | No external KV connector |
 | `tp1-pp4`, `tp1-pp8`, `tp1-pp16`, `tp1-pp32` | One TP1 engine split into 4, 8, 16 or 32 pipeline stages | One stage per GPU over 1, 2, 4 or 8 nodes: no TP all-reduce and no expert all-to-all, only the pipeline hand-offs |
 | `tp4-pp8` | One TP4 x PP8 engine over 8 nodes | One stage per node; TP4 and EP4 inside each node, so the MoE all-to-all stays on NVLink |
@@ -209,7 +211,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `moe-triton` | Triton MoE kernels | For checkpoints where DeepGEMM is not wanted, after a layer that selects it |
 | `loader-conc-1`, `loader-gpu` | RunAI streamer settings for online FP8 | One read stream instead of 4; or distributed mode, which streams to the GPUs and quantizes there |
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
-| `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; composable only with layers that set nothing but `server`, `environment`, and `features` (for example `+prefix-caching`), which apply to both roles |
+| `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; composable only with layers that set nothing but `server`, `environment`, `features` and `role_server` (for example `+prefix-caching`); the first three apply to both roles, `role_server` (`{"decode": {...}}`) to one |
 | `disaggregated-pd-prefill-no-async` | `disaggregated-pd` with async scheduling off on prefill | With async scheduling, the prefill engine marks KV ready to send one (eager HT) step late; decode keeps async scheduling |
 | `disaggregated-pd-prefill-dbo` | `disaggregated-pd` with dual batch overlap on prefill | Splits prefill steps above 512 tokens into two micro-batches, so one's HT all-to-all overlaps the other's compute; decode (at most 16 tokens per step) unchanged |
 | `disaggregated-pd-prefill-4096` | `disaggregated-pd` with a 4096-token prefill step and 32 decode sequences | Doubles the prefill `max-num-batched-tokens` from 2048, and decode `max-num-seqs` (and its equal batch budget) from 16 to 32 per engine |
