@@ -100,6 +100,7 @@ uenv's packages are read-only; the status file records the skip.
 | `sbatch/serve.sbatch` | Multi-node serving and benchmark workload |
 | `sbatch/download.sbatch` | Resumable model download job |
 | `benchmarks/` | Standard short-context and production-parity long-context suites |
+| `tools/vllm-multi-turn/` | vLLM's multi-turn chat benchmark, vendored for multi-turn suite points |
 | `results/` | Versionable benchmark records |
 | `logs/` | Ignored Slurm, server, smoke, and cache logs |
 | `tools/install-bencher.sh` | Pinned repository-local Bencher CLI installer |
@@ -168,7 +169,8 @@ scenario layers. A `null` value in it leaves the option out, and `tensor_paralle
 The Apertus2 checkpoints are base models without a chat template. Their profiles use raw
 `/v1/completions`. Random-token suites run as they are. Real-text suites need prompt files cut to
 raw token counts with the model's tokenizer, in the profile's `DATASET_DIR` (see
-[Real-text prompts](#real-text-prompts)). They pin their own UCCL
+[Real-text prompts](#real-text-prompts)). The harness refuses multi-turn points for them,
+because that client sends chat requests. They pin their own UCCL
 overlay (UCCL main 1c9e39bb, built with `MODEL_PROFILE=<profile> tools/build-uccl-overlay.sh`) and
 apply the runtime patches `0001`, `0002` and `0003` (see [Runtime patches](#runtime-patches)).
 `0002` is for online FP8: vLLM's `numa-bind` binds each worker's memory to its own CPU node, and
@@ -217,6 +219,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `gpu-mem-80` | GPU memory share 0.80 | Leaves room for the DeepGEMM grouped-GEMM warmup, which memory profiling does not reserve (DeepEP high-throughput, DBO, 4,096-token steps) |
 | `deepep-buffer-2048` | 2,048 MB DeepEP buffer | `VLLM_DEEPEP_BUFFER_SIZE_MB` 2048 instead of 1024, about 2 GiB more per GPU |
 | `fi-log-cxi-warn` | libfabric CXI warnings | Debug: `FI_LOG_LEVEL=warn`, `FI_LOG_PROV=cxi` in the worker script |
+| `agentic-prefill` | Agentic-prefill server settings | 128K context, local prefix cache, 16,384-token steps, at most 8,192 tokens of one request per step; for `benchmarks/poisson-agentic.tsv` |
 | `loader-conc-1`, `loader-gpu` | RunAI streamer settings for online FP8 | One read stream instead of 4; or distributed mode, which streams to the GPUs and quantizes there |
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
 | `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; composable only with layers that set nothing but `server`, `environment`, `features` and `role_server` (for example `+prefix-caching`); the first three apply to both roles, `role_server` (`{"decode": {...}}`) to one |
@@ -425,6 +428,68 @@ stops before serving traffic if a file is missing or has fewer prompts than the 
 the manifest records each file's SHA-256. `datasets` can be a symlink to scratch storage that the
 EDF mounts. The files are not in git: they are generated, and they hold text from third-party
 datasets under their own licences.
+
+### Multi-turn chat
+
+`benchmarks/multi-turn.tsv` sends whole conversations instead of single requests, so it measures
+how prefix caching and KV capacity hold up as each conversation's history grows. Its points set
+`driver=multi-turn`, which runs vLLM's multi-turn chat benchmark (`tools/vllm-multi-turn`, from
+vLLM v0.31.0) through `scripts/multi_turn.py`.
+
+Each conversation has 10 user turns of 512 tokens and 10 answers of 256 tokens, after a
+2,000-token prefix shared by all conversations (like a system prompt) and 3,000 tokens of its
+own. Every turn resends the whole history, up to about 12,700 tokens, which fits the 32K context
+of the default scenarios. The points step concurrency (clients, one request in flight each) from
+1 to 64, with twice as many conversations open as clients, so finished turns wait in the KV cache
+for their next turn.
+
+The conversations are cut from a plain-text book, The Count of Monte Cristo (Project Gutenberg
+#1184). The suite reads the Hugging Face copy in `sedthh/gutenberg_english` (row 892), which has
+the Gutenberg licence header and footer removed, as `datasets/monte-cristo-hf.txt`; it is not
+byte-identical to gutenberg.org's `pg1184.txt`, hence the separate name. Fetch it once on a login
+node:
+
+```bash
+uv run --no-project python - <<'PY'
+import json, urllib.parse, urllib.request
+where = urllib.parse.quote('"METADATA" LIKE \'%"text_id": 1184,%\'')
+url = ("https://datasets-server.huggingface.co/filter?dataset=sedthh/gutenberg_english"
+       f"&config=default&split=train&where={where}&length=1")
+row = json.load(urllib.request.urlopen(url, timeout=180))["rows"][0]["row"]
+assert json.loads(row["METADATA"])["text_id"] == 1184
+open("datasets/monte-cristo-hf.txt", "w", encoding="utf-8").write(row["TEXT"])
+PY
+./scripts/submit-serve.py --scenario prefix-caching \
+  --benchmark-suite benchmarks/multi-turn.tsv
+```
+
+Run it with `prefix-caching` composed into the scenario (also for PD, e.g.
+`disaggregated-pd+prefix-caching`); without it every turn prefills the whole history again.
+Each invocation reads the book from its own seeded offset, so no pass or point finds another's
+prefixes in the cache. The manifest records the seed, the offset, the generated conversation
+config, and the prefix-cache hits and queries of each engine role for each invocation (read from
+`/metrics`, from both roles in PD). With several data-parallel engines (TP2 x DP8), vLLM places
+each request by load, not by prefix, so a conversation's next turn often runs on an engine that
+does not hold its history; the server's hit count shows how much of the cache was used. Each
+answer has exactly `output_len` tokens (`ignore_eos`), reasoning included: the run fails if
+the server's count for any request differs. The request count is exact.
+
+### Poisson arrivals and shared prefixes
+
+Three optional suite columns change how a random-token point sends its requests:
+
+- `request_rate`: requests start as a Poisson process at this many requests per second
+  (`vllm bench --request-rate`); `concurrency` is then only a cap.
+- `input_range_ratio` r: prompt lengths spread evenly over `input_len` × [1 − r, 1 + r], so steps
+  of different sizes meet in one point.
+- `random_prefix_len`: the same random prefix of this many tokens goes before every prompt of the
+  point (`--random-prefix-len`). With prefix caching on, it becomes a shared cached prefix, and
+  `input_len` is then the new part only.
+
+`benchmarks/poisson-mixed.tsv` sends 8k prompts (±75%) with 256 tokens out at 0.5 to 3 requests
+per second. `benchmarks/poisson-agentic.tsv` sends a 100K shared prefix plus 7.5K to 12.5K new
+tokens at 0.8 to 2.8 requests per second; run it with `+agentic-prefill` (128K context, prefix
+cache on, 16,384-token steps, at most 8,192 tokens of one request per step).
 
 Every point uses deterministic greedy sampling (`temperature=0`) with random prompt generation seeded
 to zero. Each measured repetition contains at least 128 requests (256 at concurrency 64), so every

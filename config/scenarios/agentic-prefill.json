@@ -1,0 +1,13 @@
+{
+  "id": "agentic-prefill",
+  "description": "Agentic-prefill server settings, after Inferact's PP study: context up to 128K tokens so a long shared prefix fits, the local prefix cache on, a 16384-token step budget, and at most 8192 tokens of one request per step. Inferact used a 32768-token budget, but with it vLLM 0.31 on GLM-5.3 fails in the MoE shared-expert code (AssertionError in shared_experts.py; upstream issue vllm-project/vllm#46857 has no merged fix). Use it with benchmarks/poisson-agentic.tsv (100K shared prefix plus 7.5K-12.5K new tokens).",
+  "server": {
+    "max-model-len": 131072,
+    "enable-prefix-caching": true,
+    "max-num-batched-tokens": 16384,
+    "long-prefill-token-threshold": 8192
+  },
+  "features": {
+    "local_prefix_caching": true
+  }
+}

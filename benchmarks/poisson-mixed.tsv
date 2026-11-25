@@ -1,0 +1,7 @@
+name	scenario	input_len	output_len	prompts	warmup_prompts	concurrency	input_range_ratio	request_rate
+poisson-in8k-var-r0p5	concurrency	8192	256	100	16	256	0.75	0.5
+poisson-in8k-var-r1p0	concurrency	8192	256	100	16	256	0.75	1.0
+poisson-in8k-var-r1p5	concurrency	8192	256	100	16	256	0.75	1.5
+poisson-in8k-var-r2p0	concurrency	8192	256	120	16	256	0.75	2.0
+poisson-in8k-var-r2p5	concurrency	8192	256	150	16	256	0.75	2.5
+poisson-in8k-var-r3p0	concurrency	8192	256	180	16	256	0.75	3.0

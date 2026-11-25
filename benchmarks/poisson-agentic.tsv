@@ -1,0 +1,7 @@
+name	scenario	input_len	output_len	prompts	warmup_prompts	concurrency	input_range_ratio	request_rate	random_prefix_len
+agentic-p100k-in10k-r0p8	prefill	10000	1	150	8	256	0.25	0.8	100000
+agentic-p100k-in10k-r1p2	prefill	10000	1	150	8	256	0.25	1.2	100000
+agentic-p100k-in10k-r1p6	prefill	10000	1	150	8	256	0.25	1.6	100000
+agentic-p100k-in10k-r2p0	prefill	10000	1	150	8	256	0.25	2.0	100000
+agentic-p100k-in10k-r2p4	prefill	10000	1	150	8	256	0.25	2.4	100000
+agentic-p100k-in10k-r2p8	prefill	10000	1	150	8	256	0.25	2.8	100000

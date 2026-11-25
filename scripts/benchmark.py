@@ -13,6 +13,7 @@ import socket
 import subprocess
 import statistics
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from script_utils import (
     canonical_sha256,
     file_sha256,
 )
+import multi_turn
 import server_metrics
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +114,13 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
             point: dict[str, Any] = {"name": name, "scenario": row["scenario"].strip()}
             # The optional dataset column names a real-text prompt set; empty means random.
             point["dataset"] = (row.get("dataset") or "").strip() or RANDOM_DATASET
+            # The optional driver column picks the client; empty means vllm bench serve.
+            # Only multi-turn points carry a driver key, so other suites keep their identity.
+            driver = (row.get("driver") or "").strip()
+            if driver == multi_turn.DRIVER:
+                multi_turn.parse_row(row, point, line)
+            elif driver:
+                raise ValueError(f"line {line}: unknown driver {driver!r}")
             for field in (
                 "input_len",
                 "output_len",
@@ -131,10 +140,44 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"line {line}: warmup_prompts cannot exceed prompts"
                 )
-            if point["warmup_prompts"] < point["concurrency"]:
+            # The optional request_rate column sends requests as a Poisson process at that many
+            # requests per second (vllm bench --request-rate); concurrency is then only a cap.
+            # Empty means all requests start at once, limited by concurrency. Only set points
+            # carry the key.
+            rate = (row.get("request_rate") or "").strip()
+            if rate:
+                point["request_rate"] = float(rate)
+                if not point["request_rate"] > 0:
+                    raise ValueError(f"line {line}: request_rate must be positive")
+            elif point["warmup_prompts"] < point["concurrency"]:
                 raise ValueError(
                     f"line {line}: warmup_prompts must reach concurrency"
                 )
+            # The optional input_range_ratio column spreads random prompt lengths uniformly over
+            # input_len x [1 - r, 1 + r], so steps of different sizes meet in one point. Empty means
+            # every prompt has input_len tokens; only set points carry the key.
+            ratio = (row.get("input_range_ratio") or "").strip()
+            if ratio:
+                point["input_range_ratio"] = float(ratio)
+                if not 0 < point["input_range_ratio"] < 1:
+                    raise ValueError(f"line {line}: input_range_ratio must be between 0 and 1")
+                if point["dataset"] != RANDOM_DATASET:
+                    raise ValueError(f"line {line}: input_range_ratio needs random prompts")
+            # The optional random_prefix_len column puts the same random_prefix_len random tokens
+            # in front of every prompt of the point (vllm bench --random-prefix-len). With the
+            # server's prefix cache on, it becomes a shared cached prefix; input_len is then the
+            # new part only. vllm bench draws the prefix after one length per prompt from the same
+            # seeded generator, so points share a prefix only when they have the same prompt count.
+            # (Multi-turn points have their own prefix_len column; see multi_turn.py.)
+            prefix = (row.get("random_prefix_len") or "").strip()
+            if prefix:
+                point["random_prefix_len"] = int(prefix)
+                if point["random_prefix_len"] <= 0:
+                    raise ValueError(f"line {line}: random_prefix_len must be positive")
+                if point["dataset"] != RANDOM_DATASET:
+                    raise ValueError(f"line {line}: random_prefix_len needs random prompts")
+            if point.get("driver") == multi_turn.DRIVER:
+                multi_turn.check_point(point, line)
             points.append(point)
     if not points:
         raise ValueError("suite contains no benchmark points")
@@ -146,10 +189,10 @@ def dataset_file(dataset_dir: Path, point: dict[str, Any]) -> Path:
     return dataset_dir / f"{point['dataset']}-in{point['input_len']}.jsonl"
 
 
-# The points a model without a chat template (api=completions) cannot run. Real-text prompt files
-# are cut to length under a chat template, unless make-dataset.py built them with
-# --no-chat-template (chat_template false in <dataset>.build.json): then they are cut to raw token
-# counts, as /v1/completions sends them.
+# The points a model without a chat template (api=completions) cannot run. The multi-turn client
+# sends chat requests. Real-text prompt files are cut to length under a chat
+# template, unless make-dataset.py built them with --no-chat-template (chat_template false in
+# <dataset>.build.json): then they are cut to raw token counts, as /v1/completions sends them.
 def chat_only_points(points: list[dict[str, Any]], dataset_dir: Path) -> list[str]:
     def raw_text(dataset: str) -> bool:
         build = dataset_dir / f"{dataset}.build.json"
@@ -158,7 +201,8 @@ def chat_only_points(points: list[dict[str, Any]], dataset_dir: Path) -> list[st
     return [
         point["name"]
         for point in points
-        if point.get("dataset", RANDOM_DATASET) != RANDOM_DATASET and not raw_text(point["dataset"])
+        if point.get("driver")
+        or (point.get("dataset", RANDOM_DATASET) != RANDOM_DATASET and not raw_text(point["dataset"]))
     ]
 
 
@@ -166,6 +210,12 @@ def chat_only_points(points: list[dict[str, Any]], dataset_dir: Path) -> list[st
 def resolve_datasets(points: list[dict[str, Any]], dataset_dir: Path) -> dict[str, Any]:
     records = {}
     for point in points:
+        if point.get("driver") == multi_turn.DRIVER:
+            path = multi_turn.text_file(dataset_dir, point)
+            if not path.is_file():
+                raise ValueError(f"{point['name']}: {path} is missing")
+            records[point["name"]] = {"file": path.name, "sha256": file_sha256(path)}
+            continue
         if point["dataset"] == RANDOM_DATASET:
             continue
         path = dataset_file(dataset_dir, point)
@@ -227,11 +277,15 @@ def run_with_heartbeat(
     label: str,
     *,
     interval_seconds: float = STATUS_INTERVAL_SECONDS,
+    env: dict[str, str] | None = None,
 ) -> None:
     if interval_seconds <= 0:
         raise ValueError("status interval must be positive")
     started = time.monotonic()
-    process = subprocess.Popen(command)
+    options: dict[str, Any] = {}
+    if env is not None:
+        options["env"] = {**os.environ, **env}
+    process = subprocess.Popen(command, **options)
     try:
         while True:
             try:
@@ -256,6 +310,31 @@ def run_with_heartbeat(
     log_status(
         f"{label}: complete; elapsed={format_elapsed(time.monotonic() - started)}"
     )
+
+
+# Run one vllm bench serve invocation. The client sometimes dies from a signal (SIGSEGV) while it
+# exits, after it has written a complete result file; that result is kept, and the signal is
+# returned for the manifest. A crash before a complete result, or any other failure, still raises.
+# PYTHONFAULTHANDLER makes such a crash print every thread's stack into the job log.
+def run_bench_client(command: list[str], label: str, result_file: Path, prompts: int) -> dict[str, Any]:
+    started = time.time()
+    try:
+        run_with_heartbeat(command, label, env={"PYTHONFAULTHANDLER": "1"})
+        return {}
+    except subprocess.CalledProcessError as error:
+        if error.returncode >= 0 or not result_file.is_file() or result_file.stat().st_mtime < started:
+            raise
+        try:
+            result = json.loads(result_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            raise error from None
+        if result.get("completed") != prompts or result.get("failed", 0) != 0:
+            raise
+        log_status(
+            f"{label}: client exited by signal {-error.returncode} after writing a complete "
+            f"result ({prompts} requests); keeping it"
+        )
+        return {"client_exit_signal": -error.returncode}
 
 
 # Verify both raw-token and chat-template tokenization through the serving endpoint. A model
@@ -334,6 +413,14 @@ def build_benchmark_command(
             "--input-len",
             str(point["input_len"]),
         ]
+        if "input_range_ratio" in point:
+            # Output lengths stay fixed; only the prompt lengths spread.
+            dataset_args += [
+                "--random-range-ratio",
+                json.dumps({"input": point["input_range_ratio"], "output": 0.0}),
+            ]
+        if "random_prefix_len" in point:
+            dataset_args += ["--random-prefix-len", str(point["random_prefix_len"])]
     else:
         # The prompt files hold raw text. The server applies the chat template once, as
         # it does for random prompts, so the client must not apply it as well.
@@ -371,6 +458,7 @@ def build_benchmark_command(
         str(point["prompts"]),
         "--max-concurrency",
         str(point["concurrency"]),
+        *(["--request-rate", str(point["request_rate"])] if "request_rate" in point else []),
         "--num-warmups",
         str(warmups),
         "--seed",
@@ -388,6 +476,44 @@ def build_benchmark_command(
         "--label",
         label,
     ]
+
+
+# Run one multi-turn invocation; return its metrics and what reproduces it.
+def run_multi_turn(
+    args: argparse.Namespace,
+    point: dict[str, Any],
+    result_file: Path,
+    *,
+    seed: int,
+    label: str,
+) -> tuple[dict[str, Any], int, list[str], dict[str, Any]]:
+    config_file = result_file.with_name(f"{result_file.stem}.conversations.json")
+    with tempfile.TemporaryDirectory() as directory:
+        text, offset = multi_turn.rotated_text(
+            multi_turn.text_file(args.dataset_dir, point), seed, Path(directory)
+        )
+        config_file.write_text(
+            json.dumps(multi_turn.conversations_config(point, text), indent=2) + "\n"
+        )
+        command = multi_turn.command(
+            point,
+            python=sys.executable,
+            model=args.model,
+            served_model_name=args.served_model_name,
+            base_url=args.base_url,
+            config_file=config_file,
+            result_file=result_file,
+            seed=seed,
+            request_timeout=args.multi_turn_request_timeout,
+        )
+        run_with_heartbeat(command, label)
+    result, total_input_tokens = multi_turn.load_result(result_file, point)
+    record = {
+        "seed": seed,
+        "text_offset": offset,
+        "conversations_config": config_file.name,
+    }
+    return result, total_input_tokens, command, record
 
 
 # Load one completed invocation and enforce request and post-template token counts.
@@ -416,7 +542,10 @@ def load_benchmark_result(
     # a wrong chat template or truncated prompts differ by far more. The observed total is kept
     # in the run record next to the expected per-request length.
     drift = total_input_tokens - expected_input_tokens
-    if abs(drift) > completed:
+    # With input_range_ratio r, each prompt length is drawn from [len*(1-r), len*(1+r)], so only
+    # the bound of that range is a real check; the per-request length is then a mean.
+    allowed = completed + round(point.get("input_range_ratio", 0.0) * expected_input_tokens)
+    if abs(drift) > allowed:
         raise RuntimeError(
             f"{point['name']}: post-template input length mismatch: "
             f"observed={total_input_tokens}, expected={expected_input_tokens} "
@@ -674,6 +803,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bencher-testbed", required=True)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument(
+        "--multi-turn-request-timeout",
+        type=int,
+        default=1800,
+        help="seconds one multi-turn request may take before the tool gives up",
+    )
     args = parser.parse_args()
     if args.repetitions < 2:
         parser.error("--repetitions must be at least 2")
@@ -886,11 +1021,14 @@ def main() -> int:
         atomic_json(output_dir / "manifest.json", manifest)
         log_status(f"full-suite warmup: starting; points={len(points)}")
         for index, point in enumerate(points, start=1):
+            point_label = f"warmup {index}/{len(points)} {point['name']}"
+            extra: dict[str, Any] = {}
+            metrics_before = server_metrics.scrape_all(metric_urls)
             warmup = make_warmup_point(point)
             effective_input_len = (
-                point["input_len"] + token_alignment["chat_template_token_overhead"]
+                point["input_len"] + point.get("random_prefix_len", 0)
+                + token_alignment["chat_template_token_overhead"]
             )
-            point_label = f"warmup {index}/{len(points)} {point['name']}"
             log_status(
                 f"{point_label}: starting; "
                 f"in={point['input_len']} effective_in={effective_input_len} "
@@ -899,18 +1037,23 @@ def main() -> int:
                 f"concurrency={point['concurrency']}"
             )
             warmup_file = warmup_dir / f"{point['name']}.json"
-            metrics_before = server_metrics.scrape_all(metric_urls)
-            command = build_benchmark_command(
-                args,
-                warmup,
-                warmup_file,
-                label=f"warmup-{point['name']}",
-                warmups=0,
-            )
-            run_with_heartbeat(command, point_label)
-            _, total_input_tokens = load_benchmark_result(
-                warmup_file, warmup, effective_input_len
-            )
+            if point.get("driver") == multi_turn.DRIVER:
+                # Every invocation gets its own seed, so none shares conversation text.
+                _, total_input_tokens, command, extra = run_multi_turn(
+                    args, warmup, warmup_file, seed=index, label=point_label
+                )
+            else:
+                command = build_benchmark_command(
+                    args,
+                    warmup,
+                    warmup_file,
+                    label=f"warmup-{point['name']}",
+                    warmups=0,
+                )
+                extra = run_bench_client(command, point_label, warmup_file, warmup["prompts"])
+                _, total_input_tokens = load_benchmark_result(
+                    warmup_file, warmup, effective_input_len
+                )
             manifest["warmup"]["points"].append(
                 {
                     **warmup,
@@ -919,6 +1062,7 @@ def main() -> int:
                     "raw_result": str(warmup_file.relative_to(output_dir)),
                     "raw_sha256": file_sha256(warmup_file),
                     "command": command,
+                    **extra,
                     "server_metrics": server_metrics.difference_all(
                         metrics_before, server_metrics.scrape_all(metric_urls)
                     ),
@@ -946,7 +1090,8 @@ def main() -> int:
         point_records: dict[str, dict[str, Any]] = {}
         for point in points:
             effective_input_len = (
-                point["input_len"] + token_alignment["chat_template_token_overhead"]
+                point["input_len"] + point.get("random_prefix_len", 0)
+                + token_alignment["chat_template_token_overhead"]
             )
             point_raw_dir = raw_dir / point["name"]
             point_raw_dir.mkdir()
@@ -974,27 +1119,38 @@ def main() -> int:
                     f"measure pass {repetition}/{args.repetitions} "
                     f"point {index}/{len(points)} {point['name']}"
                 )
-                log_status(
-                    f"{point_label}: starting; "
-                    f"in={point['input_len']} effective_in={effective_input_len} "
-                    f"out={point['output_len']} prompts={point['prompts']} "
-                    f"concurrency={point['concurrency']}"
-                )
                 raw_file = (
                     raw_dir / point["name"] / f"repetition-{repetition}.json"
                 )
+                extra = {}
                 metrics_before = server_metrics.scrape_all(metric_urls)
-                command = build_benchmark_command(
-                    args,
-                    point,
-                    raw_file,
-                    label=f"{point['name']}-repetition-{repetition}",
-                    warmups=args.warmups,
-                )
-                run_with_heartbeat(command, point_label)
-                result, total_input_tokens = load_benchmark_result(
-                    raw_file, point, effective_input_len
-                )
+                if point.get("driver") == multi_turn.DRIVER:
+                    log_status(
+                        f"{point_label}: starting; "
+                        f"in={point['input_len']} out={point['output_len']} "
+                        f"prompts={point['prompts']} concurrency={point['concurrency']}"
+                    )
+                    result, total_input_tokens, command, extra = run_multi_turn(
+                        args, point, raw_file, seed=1000 * repetition + index, label=point_label
+                    )
+                else:
+                    log_status(
+                        f"{point_label}: starting; "
+                        f"in={point['input_len']} effective_in={effective_input_len} "
+                        f"out={point['output_len']} prompts={point['prompts']} "
+                        f"concurrency={point['concurrency']}"
+                    )
+                    command = build_benchmark_command(
+                        args,
+                        point,
+                        raw_file,
+                        label=f"{point['name']}-repetition-{repetition}",
+                        warmups=args.warmups,
+                    )
+                    extra = run_bench_client(command, point_label, raw_file, point["prompts"])
+                    result, total_input_tokens = load_benchmark_result(
+                        raw_file, point, effective_input_len
+                    )
                 point_metrics = server_metrics.difference_all(
                     metrics_before, server_metrics.scrape_all(metric_urls)
                 )
@@ -1013,6 +1169,7 @@ def main() -> int:
                         "raw_result": str(raw_file.relative_to(output_dir)),
                         "raw_sha256": file_sha256(raw_file),
                         "command": command,
+                        **extra,
                         "server_metrics": point_metrics,
                     }
                 )
@@ -1056,7 +1213,10 @@ def main() -> int:
         raise
 
     with (output_dir / "summary.tsv").open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=SUMMARY_FIELDS, delimiter="\t")
+        # Multi-turn rows carry columns that the summary does not list.
+        writer = csv.DictWriter(
+            stream, fieldnames=SUMMARY_FIELDS, delimiter="\t", extrasaction="ignore"
+        )
         writer.writeheader()
         writer.writerows(summary)
     atomic_json(output_dir / "bencher.json", bencher)

@@ -21,10 +21,12 @@ from benchmark import (
     build_benchmark_command,
     chat_only_points,
     kv_cache_tokens,
+    load_benchmark_result,
     load_suite,
     make_warmup_point,
     publish_jit_cache_after_warmup,
     resolve_datasets,
+    run_bench_client,
     run_with_heartbeat,
     verify_token_alignment,
 )
@@ -107,6 +109,83 @@ class BenchmarkStatisticsTests(unittest.TestCase):
                 12.0 + 8.0**0.5,
             )
 
+
+
+class InputRangeRatioTests(unittest.TestCase):
+    def write_suite(self, ratio: str, dataset: str = "") -> Path:
+        directory = Path(tempfile.mkdtemp())
+        suite = directory / "suite.tsv"
+        suite.write_text(
+            "name\tscenario\tdataset\tinput_len\toutput_len\tprompts\twarmup_prompts\tconcurrency\tinput_range_ratio\n"
+            f"p\tprefill\t{dataset}\t8192\t1\t128\t16\t4\t{ratio}\n"
+        )
+        return suite
+
+    def test_the_ratio_reaches_vllm_bench_for_inputs_only(self) -> None:
+        from benchmark import build_benchmark_command
+
+        point = load_suite(self.write_suite("0.5"))[0]
+        args = mock.Mock(base_url="http://x", served_model_name="m", model="m")
+        command = build_benchmark_command(args, point, Path("r.json"), label="p", warmups=0)
+
+        flag = command.index("--random-range-ratio")
+        self.assertEqual(json.loads(command[flag + 1]), {"input": 0.5, "output": 0.0})
+
+    def test_bad_ratios_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+            load_suite(self.write_suite("1.5"))
+        with self.assertRaisesRegex(ValueError, "needs random prompts"):
+            load_suite(self.write_suite("0.5", dataset="mixed"))
+
+    def test_request_rate_sends_poisson_arrivals_and_only_caps_concurrency(self) -> None:
+        directory = Path(tempfile.mkdtemp())
+        suite = directory / "suite.tsv"
+        suite.write_text(
+            "name\tscenario\tinput_len\toutput_len\tprompts\twarmup_prompts\tconcurrency\trequest_rate\n"
+            "poisson\tconcurrency\t8192\t256\t120\t16\t256\t2.5\n"
+            "fixed\tdecode\t1024\t512\t100\t16\t16\t\n"
+        )
+        poisson, fixed = load_suite(suite)
+        self.assertEqual(poisson["request_rate"], 2.5)
+        self.assertNotIn("request_rate", fixed)
+        args = mock.Mock(base_url="http://x", served_model_name="m", model="m", dataset_dir=directory)
+        command = build_benchmark_command(args, poisson, directory / "r.json", label="l", warmups=1)
+        self.assertEqual(command[command.index("--request-rate") + 1], "2.5")
+        command = build_benchmark_command(args, fixed, directory / "r.json", label="l", warmups=1)
+        self.assertNotIn("--request-rate", command)
+
+    def test_random_prefix_len_puts_one_shared_random_prefix_before_every_prompt(self) -> None:
+        directory = Path(tempfile.mkdtemp())
+        suite = directory / "suite.tsv"
+        suite.write_text(
+            "name\tscenario\tinput_len\toutput_len\tprompts\twarmup_prompts\tconcurrency\trandom_prefix_len\n"
+            "agentic\tprefill\t10000\t1\t100\t8\t8\t100000\n"
+            "plain\tprefill\t8192\t1\t100\t16\t16\t\n"
+        )
+        agentic, plain = load_suite(suite)
+        self.assertEqual(agentic["random_prefix_len"], 100000)
+        self.assertNotIn("random_prefix_len", plain)
+        args = mock.Mock(base_url="http://x", served_model_name="m", model="m", dataset_dir=directory)
+        command = build_benchmark_command(args, agentic, directory / "r.json", label="l", warmups=1)
+        self.assertEqual(command[command.index("--random-prefix-len") + 1], "100000")
+        command = build_benchmark_command(args, plain, directory / "r.json", label="l", warmups=1)
+        self.assertNotIn("--random-prefix-len", command)
+
+    def check_total(self, observed: int, ratio: float | None) -> None:
+        result = Path(tempfile.mkdtemp()) / "result.json"
+        result.write_text(json.dumps({"completed": 16, "failed": 0, "total_input_tokens": observed}))
+        point = {"name": "p", "prompts": 16}
+        if ratio is not None:
+            point["input_range_ratio"] = ratio
+        load_benchmark_result(result, point, 8192)
+
+    def test_spread_lengths_pass_the_length_check_within_the_ratio(self) -> None:
+        # 16 prompts of 8192 +- 75%: the total drifts by design, but not beyond the range.
+        self.check_total(16 * 8192 + 863, 0.75)
+        with self.assertRaisesRegex(RuntimeError, "input length mismatch"):
+            self.check_total(16 * 8192 * 2, 0.75)
+        with self.assertRaisesRegex(RuntimeError, "input length mismatch"):
+            self.check_total(16 * 8192 + 863, None)
 
 
 class KvCacheTokensTests(unittest.TestCase):
@@ -340,6 +419,39 @@ class BenchmarkHeartbeatTests(unittest.TestCase):
         )
 
 
+class BenchClientCrashTests(unittest.TestCase):
+    """A client that dies by a signal after writing a complete result keeps that result."""
+
+    def client(self, directory: Path, result: dict | None, signal: int | None) -> list[str]:
+        script = directory / "client.py"
+        lines = ["import json, os, signal, sys"]
+        if result is not None:
+            lines.append(f"open({str(directory / 'result.json')!r}, 'w').write(json.dumps({result!r}))")
+        lines.append("assert os.environ.get('PYTHONFAULTHANDLER') == '1'")
+        if signal is not None:
+            lines.append(f"os.kill(os.getpid(), {signal})")
+        script.write_text("\n".join(lines) + "\n")
+        return [sys.executable, str(script)]
+
+    def run_client(self, result: dict | None, signal: int | None) -> dict:
+        directory = Path(tempfile.mkdtemp())
+        command = self.client(directory, result, signal)
+        with mock.patch("benchmark.log_status"):
+            return run_bench_client(command, "point", directory / "result.json", prompts=4)
+
+    def test_a_signal_after_a_complete_result_keeps_it_and_records_the_signal(self) -> None:
+        self.assertEqual(self.run_client({"completed": 4, "failed": 0}, 11), {"client_exit_signal": 11})
+
+    def test_a_clean_exit_records_nothing(self) -> None:
+        self.assertEqual(self.run_client({"completed": 4, "failed": 0}, None), {})
+
+    def test_a_signal_without_a_complete_result_still_fails(self) -> None:
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_client(None, 11)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_client({"completed": 3, "failed": 1}, 11)
+
+
 class JitCachePublicationTests(unittest.TestCase):
     def test_readwrite_publication_triggers_agents_and_is_strict(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -466,13 +578,14 @@ class CompletionsApiTests(unittest.TestCase):
             {"name": "raw", "dataset": "mixed"},
             {"name": "templated", "dataset": "code"},
             {"name": "unbuilt", "dataset": "math"},
+            {"name": "chat", "dataset": "mixed", "driver": "multi_turn"},
         ]
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "mixed.build.json").write_text(json.dumps({"chat_template": False}))
             # GLM-5.3 files: built under a chat template, older records have no key.
             Path(tmp, "code.build.json").write_text(json.dumps({"chat_template_overhead": 12}))
 
-            self.assertEqual(chat_only_points(points, Path(tmp)), ["templated", "unbuilt"])
+            self.assertEqual(chat_only_points(points, Path(tmp)), ["templated", "unbuilt", "chat"])
 
     def test_completions_alignment_sends_no_chat_request(self) -> None:
         sent = []
