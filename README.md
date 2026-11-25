@@ -166,8 +166,9 @@ scenario layers. A `null` value in it leaves the option out, and `tensor_paralle
 ```
 
 The Apertus2 checkpoints are base models without a chat template. Their profiles use raw
-`/v1/completions`, so only random-token suites run: the harness refuses real-text points for
-them, because those prompts are cut to length under a chat template. They pin their own UCCL
+`/v1/completions`. Random-token suites run as they are. Real-text suites need prompt files cut to
+raw token counts with the model's tokenizer, in the profile's `DATASET_DIR` (see
+[Real-text prompts](#real-text-prompts)). They pin their own UCCL
 overlay (UCCL main 1c9e39bb, built with `MODEL_PROFILE=<profile> tools/build-uccl-overlay.sh`) and
 apply the runtime patches `0001`, `0002` and `0003` (see [Runtime patches](#runtime-patches)).
 `0002` is for online FP8: vLLM's `numa-bind` binds each worker's memory to its own CPU node, and
@@ -407,7 +408,19 @@ done
 ./scripts/submit-serve.py --benchmark-suite benchmarks/standard-mixed.tsv
 ```
 
-A point reads `datasets/<dataset>-in<input_len>.jsonl` through vLLM's `custom` dataset. The run
+For a model without a chat template (`MODEL_API=completions`), build the files with
+`--no-chat-template` into the directory that its profile names in `DATASET_DIR`. Each prompt then
+has exactly the point's input length as raw text, which is what `/v1/completions` sends, and the
+build record says `"chat_template": false`. The harness runs real-text points for such a model
+only from files with that record. Token counts depend on the tokenizer, so each tokenizer needs its own directory:
+
+```bash
+./scripts/make-dataset.py --tokenizer <megachonk checkpoint> --no-chat-template \
+  --lengths 256 1024 4096 16384 --out-dir datasets/megachonk
+./scripts/submit-serve.py --model-profile megachonk-fp8 --benchmark-suite benchmarks/standard-mixed.tsv
+```
+
+A point reads `<DATASET_DIR>/<dataset>-in<input_len>.jsonl` (default `datasets/`) through vLLM's `custom` dataset. The run
 stops before serving traffic if a file is missing or has fewer prompts than the point needs, and
 the manifest records each file's SHA-256. `datasets` can be a symlink to scratch storage that the
 EDF mounts. The files are not in git: they are generated, and they hold text from third-party

@@ -146,6 +146,22 @@ def dataset_file(dataset_dir: Path, point: dict[str, Any]) -> Path:
     return dataset_dir / f"{point['dataset']}-in{point['input_len']}.jsonl"
 
 
+# The points a model without a chat template (api=completions) cannot run. Real-text prompt files
+# are cut to length under a chat template, unless make-dataset.py built them with
+# --no-chat-template (chat_template false in <dataset>.build.json): then they are cut to raw token
+# counts, as /v1/completions sends them.
+def chat_only_points(points: list[dict[str, Any]], dataset_dir: Path) -> list[str]:
+    def raw_text(dataset: str) -> bool:
+        build = dataset_dir / f"{dataset}.build.json"
+        return build.is_file() and json.loads(build.read_text()).get("chat_template") is False
+
+    return [
+        point["name"]
+        for point in points
+        if point.get("dataset", RANDOM_DATASET) != RANDOM_DATASET and not raw_text(point["dataset"])
+    ]
+
+
 # Record the prompt file of every real-text point; a short file would make vLLM reuse prompts.
 def resolve_datasets(points: list[dict[str, Any]], dataset_dir: Path) -> dict[str, Any]:
     records = {}
@@ -675,13 +691,12 @@ def main() -> int:
     points = load_suite(suite_path)
     args.dataset_dir = args.dataset_dir.resolve()
     if args.api == "completions":
-        # Real-text prompts are cut to length under a chat template: a model without one runs
-        # random-token points only.
-        chat_only = [p["name"] for p in points if p.get("dataset", RANDOM_DATASET) != RANDOM_DATASET]
+        chat_only = chat_only_points(points, args.dataset_dir)
         if chat_only:
             raise SystemExit(
                 f"model profile {args.model_profile} has no chat template (api=completions); "
-                f"these points need one: {', '.join(chat_only)}"
+                f"these points need one, or prompt files built with make-dataset.py "
+                f"--no-chat-template in {args.dataset_dir}: {', '.join(chat_only)}"
             )
     datasets = resolve_datasets(points, args.dataset_dir)
     scenario = json.loads(scenario_path.read_text())

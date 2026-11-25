@@ -388,6 +388,7 @@ if [[ -n "${BENCHMARK_SUITE:-}" ]]; then
     "${WORKER_ARGS[@]}" \
     -u /usr/bin/env python3 "${ROOT}/scripts/benchmark.py" \
       --suite "${SUITE}" \
+      --dataset-dir "${ROOT}/${DATASET_DIR:-datasets}" \
       --base-url "${BASE_URL}" \
       --model "${MODEL}" \
       --served-model-name "${SERVED_MODEL_NAME:?scenario did not define served-model-name}" \

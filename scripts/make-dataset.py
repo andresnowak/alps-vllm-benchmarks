@@ -10,9 +10,14 @@ traffic. This script takes prompts from seven public sources in turn and writes
 OUT_DIR/mixed-in<length>.jsonl, or with --source NAME only from that source, into
 OUT_DIR/NAME-in<length>.jsonl (suite rows with dataset=NAME). Each prompt has exactly <length> tokens under the chat
 template, minus the template's fixed overhead; benchmark.py checks this count on the server.
+With --no-chat-template the count is of the raw text, for a model served through
+/v1/completions without a chat template (the Apertus2 base checkpoints); give those files their
+own --out-dir, the profile's DATASET_DIR, as the counts depend on the tokenizer.
 
 Run on a login node (needs internet):
   scripts/make-dataset.py --tokenizer models/GLM-5.3 --lengths 256 1024 4096 16384 --out-dir datasets
+  scripts/make-dataset.py --tokenizer <megachonk checkpoint> --no-chat-template \
+      --lengths 256 1024 4096 16384 --out-dir datasets/megachonk
 """
 
 from __future__ import annotations
@@ -67,8 +72,9 @@ def documents(name: str, seed: int) -> Iterator[str]:
 class Counter:
     """Count prompt tokens the way the server does, without the chat template overhead."""
 
-    def __init__(self, tokenizer: Any) -> None:
+    def __init__(self, tokenizer: Any, chat_template: bool = True) -> None:
         self.tokenizer = tokenizer
+        self.chat_template = chat_template
         probe = "token alignment probe"
         self.overhead = self.templated(probe) - len(self.encode(probe))
 
@@ -76,6 +82,8 @@ class Counter:
         return self.tokenizer.encode(text, add_special_tokens=False)
 
     def templated(self, text: str) -> int:
+        if not self.chat_template:
+            return len(self.encode(text))
         messages = [{"role": "user", "content": text}]
         rendered = self.tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False
@@ -109,11 +117,13 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--source", choices=sorted(SOURCES),
                         help="take every prompt from this source (default: all sources in turn)")
+    parser.add_argument("--no-chat-template", action="store_true",
+                        help="count raw tokens, for a model served without a chat template (api=completions)")
     args = parser.parse_args()
     sources = [args.source] if args.source else list(SOURCES)
     stem = args.source or "mixed"
 
-    counter = Counter(AutoTokenizer.from_pretrained(args.tokenizer))
+    counter = Counter(AutoTokenizer.from_pretrained(args.tokenizer), chat_template=not args.no_chat_template)
     streams = {name: documents(name, args.seed) for name in sources}
     args.out_dir.mkdir(parents=True, exist_ok=True)
     files = {}
@@ -135,6 +145,7 @@ def main() -> None:
     build = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "tokenizer": str(args.tokenizer),
+        "chat_template": counter.chat_template,
         "chat_template_overhead": counter.overhead,
         "sources": {name: SOURCES[name][:2] for name in sources},
         "seed": args.seed,

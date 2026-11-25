@@ -19,6 +19,7 @@ from benchmark import (
     aggregate_measurements,
     archive_reproduction_bundle,
     build_benchmark_command,
+    chat_only_points,
     kv_cache_tokens,
     load_suite,
     make_warmup_point,
@@ -458,6 +459,20 @@ class CompletionsApiTests(unittest.TestCase):
         self.assertEqual(chat[chat.index("--backend") + 1], "openai-chat")
         self.assertEqual(raw[raw.index("--endpoint") + 1], "/v1/completions")
         self.assertEqual(raw[raw.index("--backend") + 1], "openai")
+
+    def test_completions_models_run_only_raw_text_prompt_files(self) -> None:
+        points = [
+            {"name": "rand", "dataset": "random"},
+            {"name": "raw", "dataset": "mixed"},
+            {"name": "templated", "dataset": "code"},
+            {"name": "unbuilt", "dataset": "math"},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "mixed.build.json").write_text(json.dumps({"chat_template": False}))
+            # GLM-5.3 files: built under a chat template, older records have no key.
+            Path(tmp, "code.build.json").write_text(json.dumps({"chat_template_overhead": 12}))
+
+            self.assertEqual(chat_only_points(points, Path(tmp)), ["templated", "unbuilt"])
 
     def test_completions_alignment_sends_no_chat_request(self) -> None:
         sent = []
