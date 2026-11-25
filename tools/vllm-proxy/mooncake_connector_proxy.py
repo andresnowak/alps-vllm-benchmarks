@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 
 def maybe_wrap_ipv6_address(address: str) -> str:
@@ -278,15 +278,48 @@ async def send_request_to_service(
     await response.aclose()
 
 
-async def stream_service_response(
+# alps-vllm-benchmarks: upstream sends the prefill as a background task and
+# answers 200 before the decode server does. A prefill lost on a broken
+# connection then made the decode wait for KV data that never came, and the
+# client got an empty 200 minutes later. Here the proxy waits for the prefill
+# (the prefill server keeps the KV blocks until the decode pulls them, so this
+# cannot deadlock), tries a second prefill server once, and passes the decode
+# server's status on before it streams.
+PREFILL_ATTEMPTS = 2
+
+
+async def prefill_with_retry(app, api: str, req_data: dict):
+    """Run the prefill and return (prefill client, DP rank, request id)."""
+    for attempt in range(1, PREFILL_ATTEMPTS + 1):
+        request_id = str(uuid.uuid4())
+        client_info, dp_rank = get_next_client(app, "prefill")
+        try:
+            await send_request_to_service(client_info, dp_rank, api, req_data, request_id)
+            return client_info, dp_rank, request_id
+        except (httpx.TransportError, httpx.HTTPStatusError) as e:
+            status = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
+            print(
+                f"Prefill attempt {attempt}/{PREFILL_ATTEMPTS} on {client_info['url']} "
+                f"DP{dp_rank} failed: {e!r}",
+                flush=True,
+            )
+            if status is not None and status < 500:
+                raise HTTPException(status_code=status, detail=f"prefill rejected the request: {e}")
+            if attempt == PREFILL_ATTEMPTS:
+                raise HTTPException(
+                    status_code=502, detail=f"prefill failed {PREFILL_ATTEMPTS} times: {e!r}"
+                )
+
+
+async def open_decode_stream(
     prefill_client_info: dict,
     prefill_dp_rank: int,
     decode_client_info: dict,
     endpoint: str,
     req_data: dict,
     request_id: str,
-):
-    """Asynchronously stream response from a service using a client from the pool."""
+) -> httpx.Response:
+    """Send the request to the decode server and return its open response."""
     headers = {
         "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
         "X-Request-Id": request_id,
@@ -300,12 +333,9 @@ async def stream_service_response(
         "transfer_id": f"xfer-{request_id}",
     }
 
-    async with decode_client_info["client"].stream(
-        "POST", endpoint, json=req_data, headers=headers
-    ) as response:
-        response.raise_for_status()
-        async for chunk in response.aiter_bytes():
-            yield chunk
+    client = decode_client_info["client"]
+    request = client.build_request("POST", endpoint, json=req_data, headers=headers)
+    return await client.send(request, stream=True)
 
 
 async def _handle_completions(api: str, request: Request):
@@ -314,34 +344,38 @@ async def _handle_completions(api: str, request: Request):
 
     try:
         req_data = await request.json()
-        request_id = str(uuid.uuid4())
 
-        # Get the next prefill client in round-robin fashion
-        prefill_client_info, prefill_dp_rank = get_next_client(request.app, "prefill")
-
-        # Send request to prefill service
-        asyncio.create_task(
-            send_request_to_service(
-                prefill_client_info, prefill_dp_rank, api, req_data, request_id
-            )
+        prefill_client_info, prefill_dp_rank, request_id = await prefill_with_retry(
+            request.app, api, req_data
         )
 
         decode_client_info = get_next_client(request.app, "decode")
+        response = await open_decode_stream(
+            prefill_client_info,
+            prefill_dp_rank,
+            decode_client_info,
+            api,
+            req_data,
+            request_id=request_id,
+        )
+        media_type = response.headers.get("content-type", "application/json")
+        if response.status_code != 200:
+            body = await response.aread()
+            await response.aclose()
+            print(f"Decode answered {response.status_code}: {body[:500]!r}", flush=True)
+            return Response(content=body, status_code=response.status_code, media_type=media_type)
 
-        # Stream response from decode service
         async def generate_stream():
-            async for chunk in stream_service_response(
-                prefill_client_info,
-                prefill_dp_rank,
-                decode_client_info,
-                api,
-                req_data,
-                request_id=request_id,
-            ):
-                yield chunk
+            try:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+            finally:
+                await response.aclose()
 
-        return StreamingResponse(generate_stream(), media_type="application/json")
+        return StreamingResponse(generate_stream(), media_type=media_type)
 
+    except HTTPException:
+        raise
     except Exception as e:
         import sys
         import traceback
