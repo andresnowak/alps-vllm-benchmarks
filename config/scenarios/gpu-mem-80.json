@@ -1,0 +1,7 @@
+{
+  "id": "gpu-mem-80",
+  "description": "GPU memory share 0.80 instead of the platform's 0.88 (or a model profile's own value). vLLM's memory profiling does not reserve the DeepGEMM grouped-GEMM warmup workspace: with DeepEP high-throughput, dual batch overlap and 4,096-token steps, Chonk FP8 asked for 4.67 GiB after the KV cache took the rest (job 5449974). The KV cache stays large: Chonk had 62 GiB per GPU at 0.88.",
+  "server": {
+    "gpu-memory-utilization": 0.8
+  }
+}

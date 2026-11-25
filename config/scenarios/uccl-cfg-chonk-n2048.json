@@ -1,0 +1,8 @@
+{
+  "id": "uccl-cfg-chonk-n2048",
+  "description": "Compose after uccl-ht: UCCL-EP high-throughput dispatch and combine configs (num_sms, nvl_chunk, nvl_buffer, rdma_chunk, rdma_buffer) tuned for Chonk (hidden 1792) at EP16 (TP1 x DP16, 4 nodes) and 2,048 tokens per rank per call, FP8 dispatch: 2489 us per dispatch + combine in the UCCL microbenchmark (uccl-ht-retune-pinned-20261110). 2,048 tokens per call is a 2,048-token step, or a 4,096-token step with dual batch overlap.",
+  "environment": {
+    "UCCL_EP_DISPATCH_CONFIG": "24,8,512,32,512",
+    "UCCL_EP_COMBINE_CONFIG": "24,4,1024,24,512"
+  }
+}

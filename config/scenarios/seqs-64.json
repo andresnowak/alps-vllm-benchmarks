@@ -1,0 +1,7 @@
+{
+  "id": "seqs-64",
+  "description": "64 sequences per engine (max-num-seqs) instead of the baseline's 16, as in the 2026-11-11 Megachonk EP32 prefill study (HT against AGRS at 64 seqs per engine). Combine with a single-mode scenario, e.g. uccl-ht+seqs-64; alone it is the baseline with 64 seqs.",
+  "server": {
+    "max-num-seqs": 64
+  }
+}

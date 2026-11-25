@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sage Moore <sage@neuralmagic.com>
+Subject: [PATCH] [Bugfix][DBO] Include ubatch id in attention metadata cache key
+ (#48659)
+
+Runtime part of vllm-project/vllm#48659 (open), on the line numbers of the
+vLLM 0.31 Apertus2 fork (swiss-ai/vllm db8f590); the PR's test change is left out.
+
+With DBO, ubatch 1 hit ubatch 0's cached attention metadata and only swapped in
+its own block table, so it kept ubatch 0's cu_seqlens_q, seq_lens and scheduler
+metadata. A step whose second ubatch holds more requests than its first then
+fails in FlashAttention ("batch_size must be equal to batch_size_k") inside the
+ubatch thread, and every rank hangs until the RPC timeout.
+---
+ vllm/v1/worker/gpu_model_runner.py | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 348ba7dc7..09897d3aa 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -2470,7 +2470,8 @@ class GPUModelRunner(
+         # can cache the attention metadata builds and just update the block table using
+         # `builder.update_block_table` if the builder supports it.
+         cached_attn_metadata: dict[
+-            tuple[KVCacheSpec, type[AttentionMetadataBuilder]], AttentionMetadata
++            tuple[KVCacheSpec, type[AttentionMetadataBuilder], int | None],
++            AttentionMetadata,
+         ] = {}
+ 
+         def _build_attn_group_metadata(
+@@ -2484,7 +2485,7 @@ class GPUModelRunner(
+             kv_cache_spec = kv_cache_groups[kv_cache_gid].kv_cache_spec
+             if isinstance(kv_cache_spec, UniformTypeKVCacheSpecs):
+                 kv_cache_spec = kv_cache_spec.kv_cache_specs[attn_group.layer_names[0]]
+-            cache_key = (kv_cache_spec, type(builder))
++            cache_key = (kv_cache_spec, type(builder), ubid)
+ 
+             cascade_attn_prefix_len = (
+                 cascade_attn_prefix_lens[kv_cache_gid][attn_gid]
+-- 
+2.43.0

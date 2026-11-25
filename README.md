@@ -66,6 +66,8 @@ the patch files under `patches/`, separated by spaces and applied in order:
 | Patch | What it fixes | In upstream from |
 |---|---|---|
 | `vllm/0001-pr60735-deepep-ht-dbo-record-stream.patch` | DBO with DeepEP high-throughput: an illegal memory access in `ep_scatter` (seen as a hang of all ranks with 2048-token steps) | vLLM 0.33 ([#60735](https://github.com/vllm-project/vllm/pull/60735)) |
+| `vllm/0002-numa-bind-workers-to-cpu-nodes.patch` | `numa-bind` bound each worker's memory to its own CPU node, so online FP8 loading (BF16 weights held while quantizing) was killed; binds to every CPU node instead | ours |
+| `vllm/0003-pr48659-dbo-ubatch-attn-metadata-cache-key.patch` | DBO with FlashAttention: the second microbatch reused the first one's attention metadata. It ran with wrong sequence lengths, and a step whose second microbatch has more requests failed in a DBO thread (seen as a hang of all ranks at 32,640-token prompts with 4,096-token steps) | not yet ([#48659](https://github.com/vllm-project/vllm/pull/48659), open) |
 
 The directory of a patch names the package it targets, and the patch uses that project's own
 repository paths, so `git format-patch` output from upstream works unchanged. To add one:
@@ -165,13 +167,13 @@ scenario layers. A `null` value in it leaves the option out, and `tensor_paralle
 
 The Apertus2 checkpoints are base models without a chat template. Their profiles use raw
 `/v1/completions`, so only random-token suites run: the harness refuses real-text points for
-them, because those prompts are cut to length under a chat template. They do not use the UCCL
-overlay, which is built for the `vllm-cuda` image. They apply the runtime patch
-`vllm/0002-numa-bind-workers-to-cpu-nodes.patch`: vLLM's `numa-bind` binds each worker's memory to
-its own CPU node, and online FP8 holds a worker's BF16 weights while it quantizes them (about
-105 GiB per worker for Megachonk TP4 x PP4 on ~120 GiB nodes), so a bound worker was killed. The
-patch binds each worker to every CPU node; a preferred policy would spill into the GPUs' HBM nodes
-on GH200 instead.
+them, because those prompts are cut to length under a chat template. They pin their own UCCL
+overlay (UCCL main 1c9e39bb, built with `MODEL_PROFILE=<profile> tools/build-uccl-overlay.sh`) and
+apply the runtime patches `0001`, `0002` and `0003` (see [Runtime patches](#runtime-patches)).
+`0002` is for online FP8: vLLM's `numa-bind` binds each worker's memory to its own CPU node, and
+online FP8 holds a worker's BF16 weights while it quantizes them (about 105 GiB per worker for
+Megachonk TP4 x PP4 on ~120 GiB nodes), so a bound worker was killed. The patch binds each worker
+to every CPU node; a preferred policy would spill into the GPUs' HBM nodes on GH200 instead.
 
 ## Scenarios
 
@@ -209,6 +211,11 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `min-nodes-1` | Node minimum of 1 | Lowers the baseline's (and a model profile's) 4-node minimum, for layouts that need fewer nodes |
 | `fp8-mlp` | Online block-FP8 MLPs | 128x128 block FP8 for the routed experts, shared experts and dense MLPs of a BF16 checkpoint (`--quantization online`) |
 | `moe-triton` | Triton MoE kernels | For checkpoints where DeepGEMM is not wanted, after a layer that selects it |
+| `uccl-cfg-chonk-n2048`, `uccl-cfg-megachonk-n1024` | Tuned UCCL-EP high-throughput configs | After `uccl-ht`: dispatch and combine configs for Chonk at EP16 and Megachonk at EP32, 2,048 or 1,024 tokens per rank per call; Megachonk's combine keeps `rdma_buffer` 512, as 1024 overflows the 1 GiB DeepEP buffer at EP32 (`CXI CQ error: NO_SPACE`) |
+| `seqs-64` | 64 sequences per engine | Instead of 16, as in the Megachonk EP32 prefill study |
+| `gpu-mem-80` | GPU memory share 0.80 | Leaves room for the DeepGEMM grouped-GEMM warmup, which memory profiling does not reserve (DeepEP high-throughput, DBO, 4,096-token steps) |
+| `deepep-buffer-2048` | 2,048 MB DeepEP buffer | `VLLM_DEEPEP_BUFFER_SIZE_MB` 2048 instead of 1024, about 2 GiB more per GPU |
+| `fi-log-cxi-warn` | libfabric CXI warnings | Debug: `FI_LOG_LEVEL=warn`, `FI_LOG_PROV=cxi` in the worker script |
 | `loader-conc-1`, `loader-gpu` | RunAI streamer settings for online FP8 | One read stream instead of 4; or distributed mode, which streams to the GPUs and quantizes there |
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
 | `disaggregated-pd` | Mooncake prefill/decode split | Four prefill (HT) plus four decode (LL) nodes, both `deep_gemm`; CUDA only; composable only with layers that set nothing but `server`, `environment`, `features` and `role_server` (for example `+prefix-caching`); the first three apply to both roles, `role_server` (`{"decode": {...}}`) to one |

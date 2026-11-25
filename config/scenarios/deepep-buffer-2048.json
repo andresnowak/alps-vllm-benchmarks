@@ -1,0 +1,7 @@
+{
+  "id": "deepep-buffer-2048",
+  "description": "Compose after a UCCL-EP layer: a 2,048 MB DeepEP buffer (VLLM_DEEPEP_BUFFER_SIZE_MB) instead of 1,024, about 2 GiB more per GPU. Rules out a buffer too small for the dispatch and combine configs (the kernels check num_rdma_bytes only against INT_MAX).",
+  "environment": {
+    "VLLM_DEEPEP_BUFFER_SIZE_MB": "2048"
+  }
+}

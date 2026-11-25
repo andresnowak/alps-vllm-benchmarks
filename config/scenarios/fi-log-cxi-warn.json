@@ -1,0 +1,8 @@
+{
+  "id": "fi-log-cxi-warn",
+  "description": "Debug: libfabric warnings from the CXI provider (FI_LOG_LEVEL=warn, FI_LOG_PROV=cxi), set inside the launched worker script, not on srun. The target side then logs a rejected PUT or atomic event, e.g. for the UCCL-EP 'CXI CQ error: NO_SPACE' of job 5449975.",
+  "environment": {
+    "FI_LOG_LEVEL": "warn",
+    "FI_LOG_PROV": "cxi"
+  }
+}

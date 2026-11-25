@@ -1,0 +1,8 @@
+{
+  "id": "uccl-cfg-megachonk-n1024",
+  "description": "Compose after uccl-ht: UCCL-EP high-throughput dispatch and combine configs (num_sms, nvl_chunk, nvl_buffer, rdma_chunk, rdma_buffer) tuned for Megachonk (latent 4096) at EP32 (TP2 x DP16, 8 nodes, top-8 routing) and 1,024 tokens per rank per call, FP8 dispatch (uccl-ht-megachonk-3fixes-20261111). Combine keeps rdma_buffer at 512: with 1024 it needs about 1.25 GiB of RDMA buffer at 8 RDMA ranks (size hint 1.57 GiB), more than the 1 GiB that VLLM_DEEPEP_BUFFER_SIZE_MB=1024 allocates, and the kernels do not check it, so the first combine wrote past the remote MR and failed with 'CXI CQ error: NO_SPACE' on every rank (job 5449975). In the EP32 sweep, rdma_buffer 512 against 1024 took the same time (median 1.00x). With TP2, 1,024 tokens per call is a 2,048-token step, or a 4,096-token step with dual batch overlap.",
+  "environment": {
+    "UCCL_EP_DISPATCH_CONFIG": "20,8,512,16,1024",
+    "UCCL_EP_COMBINE_CONFIG": "20,2,512,16,512"
+  }
+}
