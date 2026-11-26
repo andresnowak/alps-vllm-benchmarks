@@ -1,0 +1,7 @@
+{
+  "id": "context-256k",
+  "description": "Context up to 256K tokens (262144), so the AgentX _256k datasets (benchmarks/agentx.tsv) fit. Use it with +prefix-caching.",
+  "server": {
+    "max-model-len": 262144
+  }
+}
